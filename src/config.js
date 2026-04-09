@@ -43,6 +43,7 @@ module.exports = {
     useVol: true,
     volSmaLen: 20,
     volMult: 1.0,
+    volMaxMult: 0,         // 0 = disabled (vol cap tested, hurt profit)
 
     // Risk Management
     slMult: 2.0,
@@ -66,6 +67,11 @@ module.exports = {
     useSessionFilter: true,
     sessionSkipStart: 20,  // skip entries from 20:00 UTC
     sessionSkipEnd: 2,     // to 02:00 UTC (low volume dead zone)
+    sessionSkipHours: [8, 9, 13],  // additional toxic hours to skip
+
+    // Day-of-Week Filter (0=Sun, 1=Mon, ..., 6=Sat)
+    useDowFilter: true,
+    skipDays: [1, 2],      // skip Monday + Tuesday (worst days)
 
     // Smart Exit
     cooldownBars: 5,

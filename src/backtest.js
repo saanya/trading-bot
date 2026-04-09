@@ -153,14 +153,24 @@ async function backtest(symbol, tfMinutes, months) {
   const equityCurve = [];
   const COMMISSION = 0.0004; // 0.04% taker
 
-  // Session filter helper
+  // Session filter helper (dead zone + toxic hours)
   function isSessionOk(timestamp) {
     if (!s.useSessionFilter) return true;
     const hour = new Date(timestamp).getUTCHours();
     if (s.sessionSkipStart > s.sessionSkipEnd) {
-      return !(hour >= s.sessionSkipStart || hour < s.sessionSkipEnd);
+      if (hour >= s.sessionSkipStart || hour < s.sessionSkipEnd) return false;
+    } else {
+      if (hour >= s.sessionSkipStart && hour < s.sessionSkipEnd) return false;
     }
-    return !(hour >= s.sessionSkipStart && hour < s.sessionSkipEnd);
+    if (s.sessionSkipHours && s.sessionSkipHours.includes(hour)) return false;
+    return true;
+  }
+
+  // Day-of-week filter helper
+  function isDowOk(timestamp) {
+    if (!s.useDowFilter) return true;
+    const dow = new Date(timestamp).getUTCDay();
+    return !s.skipDays || !s.skipDays.includes(dow);
   }
 
   // Start after warmup (need ~50 bars for indicators)
@@ -189,7 +199,9 @@ async function backtest(symbol, tfMinutes, months) {
     const adxOk = !s.useAdx || (dmiResult.adx[i] !== null && dmiResult.adx[i] > s.adxThresh);
     const diLongOk = !s.useDi || dmiResult.diPlus[i] > dmiResult.diMinus[i];
     const diShortOk = !s.useDi || dmiResult.diMinus[i] > dmiResult.diPlus[i];
-    const volOk = !s.useVol || volumes[i] > volSma[i] * s.volMult;
+    const volAboveMin = !s.useVol || volumes[i] > volSma[i] * s.volMult;
+    const volBelowMax = !s.volMaxMult || volumes[i] <= volSma[i] * s.volMaxMult;
+    const volOk = volAboveMin && volBelowMax;
     const cooldownOk = s.cooldownBars === 0 || barsSinceLoss > s.cooldownBars;
     const reentryOk = s.minBarsReentry === 0 || barsSinceClose > s.minBarsReentry;
 
@@ -306,12 +318,13 @@ async function backtest(symbol, tfMinutes, months) {
       if (!atrVal) continue;
 
       const sessionOk = isSessionOk(ts);
+      const dowOk = isDowOk(ts);
 
       const longSig = aboveVwap && stBullish && kCrossUp && stochLongOk && adxOk && diLongOk && volOk
-        && mtf.htfBullish && !mtf.htfConflict && cooldownOk && reentryOk && !longTriggered && sessionOk;
+        && mtf.htfBullish && !mtf.htfConflict && cooldownOk && reentryOk && !longTriggered && sessionOk && dowOk;
 
       const shortSig = belowVwap && stBearish && kCrossDown && stochShortOk && adxOk && diShortOk && volOk
-        && mtf.htfBearish && !mtf.htfConflict && cooldownOk && reentryOk && !shortTriggered && sessionOk;
+        && mtf.htfBearish && !mtf.htfConflict && cooldownOk && reentryOk && !shortTriggered && sessionOk && dowOk;
 
       if (longSig) {
         position = {
@@ -496,12 +509,23 @@ const symbol = process.argv[2] || "1000PEPEUSDT";
 const months = parseInt(process.argv[3] || "2");
 const tf = parseInt(process.argv[4] || config.timeframe);
 
-// Optional overrides: node backtest.js SYMBOL MONTHS TF SL_MULT TP_MULT SESSION P1_MULT P2_MULT
-if (process.argv[5]) s.slMult = parseFloat(process.argv[5]);
-if (process.argv[6]) s.tpMult = parseFloat(process.argv[6]);
-if (process.argv[7]) s.useSessionFilter = process.argv[7] === "1";
-if (process.argv[8]) s.partial1Mult = parseFloat(process.argv[8]);
-if (process.argv[9]) s.partial2Mult = parseFloat(process.argv[9]);
+// Optional overrides via named args: --sl=2.0 --tp=4.0 --session=1 --p1=1.2 --p2=2.0
+// New filters: --adx=25 --toxichours=8,9,13 --dow=2 --volmax=2.0 --maxbars=20
+const args = {};
+for (const a of process.argv.slice(5)) {
+  const idx = a.indexOf("=");
+  if (idx > 0) args[a.slice(0, idx).replace(/^--/, "")] = a.slice(idx + 1);
+}
+if (args.sl) s.slMult = parseFloat(args.sl);
+if (args.tp) s.tpMult = parseFloat(args.tp);
+if (args.session !== undefined) s.useSessionFilter = args.session === "1";
+if (args.p1) s.partial1Mult = parseFloat(args.p1);
+if (args.p2) s.partial2Mult = parseFloat(args.p2);
+if (args.adx) s.adxThresh = parseFloat(args.adx);
+if (args.toxichours !== undefined) s.sessionSkipHours = args.toxichours ? args.toxichours.split(",").map(Number) : [];
+if (args.dow !== undefined) { s.useDowFilter = !!args.dow; s.skipDays = args.dow ? args.dow.split(",").map(Number) : []; }
+if (args.volmax !== undefined) s.volMaxMult = parseFloat(args.volmax);
+if (args.maxbars) s.maxBarsTrade = parseInt(args.maxbars);
 
 backtest(symbol, tf, months).catch((err) => {
   console.error("Backtest failed:", err.message);

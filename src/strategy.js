@@ -96,9 +96,11 @@ function analyze(candles, mtf, state) {
   const diLongOk = !s.useDi || (dmiResult.diPlus[i] > dmiResult.diMinus[i]);
   const diShortOk = !s.useDi || (dmiResult.diMinus[i] > dmiResult.diPlus[i]);
 
-  // Volume
+  // Volume (min + max cap to avoid spike traps)
   const volSma = ind.sma(volumes, s.volSmaLen);
-  const volOk = !s.useVol || (volumes[i] > volSma[i] * s.volMult);
+  const volAboveMin = !s.useVol || (volumes[i] > volSma[i] * s.volMult);
+  const volBelowMax = !s.volMaxMult || (volumes[i] <= volSma[i] * s.volMaxMult);
+  const volOk = volAboveMin && volBelowMax;
 
   // Cooldown & re-entry
   const cooldownOk = s.cooldownBars === 0 || state.barsSinceLoss > s.cooldownBars;
@@ -116,19 +118,29 @@ function analyze(candles, mtf, state) {
   const stFlippedBearish = i > 0 && st.direction[i] === 1 && st.direction[i - 1] === -1;
   const stFlippedBullish = i > 0 && st.direction[i] === -1 && st.direction[i - 1] === 1;
 
-  // Session filter
+  // Session filter (dead zone + toxic hours)
   const sessionOk = !s.useSessionFilter || (() => {
     const hour = new Date(candles[i].timestamp).getUTCHours();
+    // Dead zone range (e.g. 20:00-02:00)
     if (s.sessionSkipStart > s.sessionSkipEnd) {
-      // Wraps midnight: e.g. 20-02 means skip 20,21,22,23,0,1
-      return !(hour >= s.sessionSkipStart || hour < s.sessionSkipEnd);
+      if (hour >= s.sessionSkipStart || hour < s.sessionSkipEnd) return false;
+    } else {
+      if (hour >= s.sessionSkipStart && hour < s.sessionSkipEnd) return false;
     }
-    return !(hour >= s.sessionSkipStart && hour < s.sessionSkipEnd);
+    // Additional toxic hours
+    if (s.sessionSkipHours && s.sessionSkipHours.includes(hour)) return false;
+    return true;
   })();
 
-  // Apply session filter to signals
-  const longSignalFiltered = longSignal && sessionOk;
-  const shortSignalFiltered = shortSignal && sessionOk;
+  // Day-of-week filter
+  const dowOk = !s.useDowFilter || (() => {
+    const dow = new Date(candles[i].timestamp).getUTCDay();
+    return !s.skipDays || !s.skipDays.includes(dow);
+  })();
+
+  // Apply all filters to signals
+  const longSignalFiltered = longSignal && sessionOk && dowOk;
+  const shortSignalFiltered = shortSignal && sessionOk && dowOk;
 
   return {
     longSignal: longSignalFiltered,
