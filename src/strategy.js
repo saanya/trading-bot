@@ -116,9 +116,23 @@ function analyze(candles, mtf, state) {
   const stFlippedBearish = i > 0 && st.direction[i] === 1 && st.direction[i - 1] === -1;
   const stFlippedBullish = i > 0 && st.direction[i] === -1 && st.direction[i - 1] === 1;
 
+  // Session filter
+  const sessionOk = !s.useSessionFilter || (() => {
+    const hour = new Date(candles[i].timestamp).getUTCHours();
+    if (s.sessionSkipStart > s.sessionSkipEnd) {
+      // Wraps midnight: e.g. 20-02 means skip 20,21,22,23,0,1
+      return !(hour >= s.sessionSkipStart || hour < s.sessionSkipEnd);
+    }
+    return !(hour >= s.sessionSkipStart && hour < s.sessionSkipEnd);
+  })();
+
+  // Apply session filter to signals
+  const longSignalFiltered = longSignal && sessionOk;
+  const shortSignalFiltered = shortSignal && sessionOk;
+
   return {
-    longSignal,
-    shortSignal,
+    longSignal: longSignalFiltered,
+    shortSignal: shortSignalFiltered,
     stBullish,
     stBearish,
     stFlippedBearish,
@@ -133,6 +147,7 @@ function analyze(candles, mtf, state) {
     volOk,
     cooldownOk,
     reentryOk,
+    sessionOk,
     mtf,
   };
 }
@@ -149,14 +164,16 @@ function decide(signal, position, state) {
     if (signal.longSignal && !state.longTriggered) {
       const sl = price - atrVal * s.slMult;
       const tp = price + atrVal * s.tpMult;
-      const partialTp = price + atrVal * s.partialMult;
-      return { action: "open_long", sl, tp, partialTp, reason: "Long signal" };
+      const partial1 = price + atrVal * s.partial1Mult;
+      const partial2 = price + atrVal * s.partial2Mult;
+      return { action: "open_long", sl, tp, partial1, partial2, reason: "Long signal" };
     }
     if (signal.shortSignal && !state.shortTriggered) {
       const sl = price + atrVal * s.slMult;
       const tp = price - atrVal * s.tpMult;
-      const partialTp = price - atrVal * s.partialMult;
-      return { action: "open_short", sl, tp, partialTp, reason: "Short signal" };
+      const partial1 = price - atrVal * s.partial1Mult;
+      const partial2 = price - atrVal * s.partial2Mult;
+      return { action: "open_short", sl, tp, partial1, partial2, reason: "Short signal" };
     }
     return { action: "none", reason: "No signal" };
   }
@@ -175,27 +192,36 @@ function decide(signal, position, state) {
     return { action: "close", reason: "Max duration reached" };
   }
 
-  // Partial TP check
-  if (s.usePartial && !state.partialDone) {
-    if (isLong && price >= state.partialTp) {
-      return { action: "partial_close", reason: `Partial TP hit at ${unrealizedR.toFixed(1)}R` };
+  // Multi-level partial TP
+  if (s.usePartial && state.partialLevel < 1) {
+    if ((isLong && price >= state.partial1) || (!isLong && price <= state.partial1)) {
+      return { action: "partial_close_1", reason: `Partial TP1 hit at ${unrealizedR.toFixed(1)}R` };
     }
-    if (!isLong && price <= state.partialTp) {
-      return { action: "partial_close", reason: `Partial TP hit at ${unrealizedR.toFixed(1)}R` };
+  }
+  if (s.usePartial && state.partialLevel === 1) {
+    if ((isLong && price >= state.partial2) || (!isLong && price <= state.partial2)) {
+      return { action: "partial_close_2", reason: `Partial TP2 hit at ${unrealizedR.toFixed(1)}R` };
     }
   }
 
-  // Trailing stop update (after partial)
-  if (state.partialDone && s.useTrailRest) {
-    if (isLong) {
-      const trailSl = Math.max(entryPrice, state.highestSince - entryAtr * s.trailAtrMult);
-      if (price <= trailSl) {
-        return { action: "close", reason: `Trailing stop hit at ${unrealizedR.toFixed(1)}R` };
-      }
-    } else {
-      const trailSl = Math.min(entryPrice, state.lowestSince + entryAtr * s.trailAtrMult);
-      if (price >= trailSl) {
-        return { action: "close", reason: `Trailing stop hit at ${unrealizedR.toFixed(1)}R` };
+  // Progressive trailing stop
+  if (s.useTrailRest && state.partialLevel >= 1) {
+    // Move SL to breakeven at +1R (trailBeR)
+    if (unrealizedR >= s.trailBeR && state.activeSl !== entryPrice) {
+      return { action: "move_sl_be", reason: `Moving SL to BE at ${unrealizedR.toFixed(1)}R` };
+    }
+    // Active trailing at +2R (trailStartR)
+    if (unrealizedR >= s.trailStartR) {
+      if (isLong) {
+        const trailSl = Math.max(entryPrice, state.highestSince - entryAtr * s.trailAtrMult);
+        if (price <= trailSl) {
+          return { action: "close", reason: `Trailing stop hit at ${unrealizedR.toFixed(1)}R` };
+        }
+      } else {
+        const trailSl = Math.min(entryPrice, state.lowestSince + entryAtr * s.trailAtrMult);
+        if (price >= trailSl) {
+          return { action: "close", reason: `Trailing stop hit at ${unrealizedR.toFixed(1)}R` };
+        }
       }
     }
   }

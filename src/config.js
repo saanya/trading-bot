@@ -48,12 +48,24 @@ module.exports = {
     slMult: 2.0,
     tpMult: 4.0,
 
-    // Partial TP + Trail
+    // Multi-Level Partial TP
     usePartial: true,
-    partialPct: 0.5,
-    partialMult: 1.8,
+    partial1Pct: 0.33,   // close 33% at level 1
+    partial1Mult: 1.2,   // level 1 = 1.2R
+    partial2Pct: 0.33,   // close 33% at level 2
+    partial2Mult: 2.0,   // level 2 = 2.0R
+    // remaining 34% rides with trailing stop
+
+    // Progressive Trailing Stop
     useTrailRest: true,
-    trailAtrMult: 1.5,
+    trailBeR: 1.0,        // move SL to breakeven at +1R
+    trailStartR: 2.0,     // start trailing at +2R
+    trailAtrMult: 1.0,    // trail distance = 1.0 ATR
+
+    // Session Filter (UTC hours)
+    useSessionFilter: true,
+    sessionSkipStart: 20,  // skip entries from 20:00 UTC
+    sessionSkipEnd: 2,     // to 02:00 UTC (low volume dead zone)
 
     // Smart Exit
     cooldownBars: 5,

@@ -144,7 +144,7 @@ async function backtest(symbol, tfMinutes, months) {
   // ─── SIMULATION ──────────────────────────────────────────────────────────
 
   const trades = [];
-  let position = null; // { side, entryPrice, entryAtr, sl, tp, partialTp, partialDone, entryBar, highest, lowest }
+  let position = null; // { side, entryPrice, entryAtr, sl, tp, partial1, partial2, partialLevel, entryBar, highest, lowest }
   let longTriggered = false;
   let shortTriggered = false;
   let barsSinceLoss = 999;
@@ -152,6 +152,16 @@ async function backtest(symbol, tfMinutes, months) {
   let equity = 1000;
   const equityCurve = [];
   const COMMISSION = 0.0004; // 0.04% taker
+
+  // Session filter helper
+  function isSessionOk(timestamp) {
+    if (!s.useSessionFilter) return true;
+    const hour = new Date(timestamp).getUTCHours();
+    if (s.sessionSkipStart > s.sessionSkipEnd) {
+      return !(hour >= s.sessionSkipStart || hour < s.sessionSkipEnd);
+    }
+    return !(hour >= s.sessionSkipStart && hour < s.sessionSkipEnd);
+  }
 
   // Start after warmup (need ~50 bars for indicators)
   const warmup = 60;
@@ -220,31 +230,46 @@ async function backtest(symbol, tfMinutes, months) {
         exitReason = "Take Profit";
         closeTrade(position, Math.max(position.tp, low), i, exitReason);
       }
-      // Partial TP
-      else if (s.usePartial && !position.partialDone) {
-        if (isLong && high >= position.partialTp) {
-          // Close partial, move SL to BE
-          const partialPnl = ((position.partialTp - position.entryPrice) / position.entryPrice) * s.partialPct;
-          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partialPct;
-          position.partialDone = true;
-          position.sl = position.entryPrice; // breakeven
-          position.sizeMultiplier = 1 - s.partialPct;
-        } else if (!isLong && low <= position.partialTp) {
-          const partialPnl = ((position.entryPrice - position.partialTp) / position.entryPrice) * s.partialPct;
-          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partialPct;
-          position.partialDone = true;
-          position.sl = position.entryPrice;
-          position.sizeMultiplier = 1 - s.partialPct;
+      // Multi-level Partial TP
+      else if (s.usePartial && position.partialLevel < 1) {
+        if ((isLong && high >= position.partial1) || (!isLong && low <= position.partial1)) {
+          const exitP = isLong ? position.partial1 : position.partial1;
+          const partialPnl = isLong
+            ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct
+            : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
+          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
+          position.partialLevel = 1;
+          position.sizeMultiplier -= s.partial1Pct;
         }
       }
-      // Trailing stop (after partial)
-      if (!exitReason && position.partialDone && s.useTrailRest) {
-        if (isLong) {
-          const trailSl = Math.max(position.entryPrice, position.highest - position.entryAtr * s.trailAtrMult);
-          position.sl = Math.max(position.sl, trailSl);
-        } else {
-          const trailSl = Math.min(position.entryPrice, position.lowest + position.entryAtr * s.trailAtrMult);
-          position.sl = Math.min(position.sl, trailSl);
+      if (!exitReason && s.usePartial && position.partialLevel === 1) {
+        if ((isLong && high >= position.partial2) || (!isLong && low <= position.partial2)) {
+          const exitP = position.partial2;
+          const partialPnl = isLong
+            ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial2Pct
+            : ((position.entryPrice - exitP) / position.entryPrice) * s.partial2Pct;
+          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial2Pct;
+          position.partialLevel = 2;
+          position.sizeMultiplier -= s.partial2Pct;
+          position.sl = position.entryPrice; // move SL to BE after both partials
+        }
+      }
+      // Progressive Trailing Stop
+      if (!exitReason && s.useTrailRest && position.partialLevel >= 1) {
+        // Move SL to breakeven at trailBeR
+        if (unrealizedR >= s.trailBeR) {
+          if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
+          else position.sl = Math.min(position.sl, position.entryPrice);
+        }
+        // Active trailing at trailStartR
+        if (unrealizedR >= s.trailStartR) {
+          if (isLong) {
+            const trailSl = Math.max(position.entryPrice, position.highest - position.entryAtr * s.trailAtrMult);
+            position.sl = Math.max(position.sl, trailSl);
+          } else {
+            const trailSl = Math.min(position.entryPrice, position.lowest + position.entryAtr * s.trailAtrMult);
+            position.sl = Math.min(position.sl, trailSl);
+          }
         }
       }
       // Max duration
@@ -280,11 +305,13 @@ async function backtest(symbol, tfMinutes, months) {
       const atrVal = atrValues[i];
       if (!atrVal) continue;
 
+      const sessionOk = isSessionOk(ts);
+
       const longSig = aboveVwap && stBullish && kCrossUp && stochLongOk && adxOk && diLongOk && volOk
-        && mtf.htfBullish && !mtf.htfConflict && cooldownOk && reentryOk && !longTriggered;
+        && mtf.htfBullish && !mtf.htfConflict && cooldownOk && reentryOk && !longTriggered && sessionOk;
 
       const shortSig = belowVwap && stBearish && kCrossDown && stochShortOk && adxOk && diShortOk && volOk
-        && mtf.htfBearish && !mtf.htfConflict && cooldownOk && reentryOk && !shortTriggered;
+        && mtf.htfBearish && !mtf.htfConflict && cooldownOk && reentryOk && !shortTriggered && sessionOk;
 
       if (longSig) {
         position = {
@@ -293,8 +320,9 @@ async function backtest(symbol, tfMinutes, months) {
           entryAtr: atrVal,
           sl: price - atrVal * s.slMult,
           tp: price + atrVal * s.tpMult,
-          partialTp: price + atrVal * s.partialMult,
-          partialDone: false,
+          partial1: price + atrVal * s.partial1Mult,
+          partial2: price + atrVal * s.partial2Mult,
+          partialLevel: 0,
           entryBar: i,
           highest: price,
           lowest: price,
@@ -310,8 +338,9 @@ async function backtest(symbol, tfMinutes, months) {
           entryAtr: atrVal,
           sl: price + atrVal * s.slMult,
           tp: price - atrVal * s.tpMult,
-          partialTp: price - atrVal * s.partialMult,
-          partialDone: false,
+          partial1: price - atrVal * s.partial1Mult,
+          partial2: price - atrVal * s.partial2Mult,
+          partialLevel: 0,
           entryBar: i,
           highest: price,
           lowest: price,
@@ -346,7 +375,7 @@ async function backtest(symbol, tfMinutes, months) {
       rMultiple,
       barsHeld: barIdx - pos.entryBar,
       reason,
-      partialClosed: pos.partialDone,
+      partialClosed: pos.partialLevel > 0,
       entryTime: new Date(pos.entryTimestamp).toISOString(),
       exitTime: new Date(ltfCandles[barIdx].timestamp).toISOString(),
     });
@@ -467,10 +496,12 @@ const symbol = process.argv[2] || "1000PEPEUSDT";
 const months = parseInt(process.argv[3] || "2");
 const tf = parseInt(process.argv[4] || config.timeframe);
 
-// Optional overrides: node backtest.js SYMBOL MONTHS TF SL_MULT TP_MULT
+// Optional overrides: node backtest.js SYMBOL MONTHS TF SL_MULT TP_MULT SESSION P1_MULT P2_MULT
 if (process.argv[5]) s.slMult = parseFloat(process.argv[5]);
 if (process.argv[6]) s.tpMult = parseFloat(process.argv[6]);
-if (process.argv[7]) s.partialMult = parseFloat(process.argv[7]);
+if (process.argv[7]) s.useSessionFilter = process.argv[7] === "1";
+if (process.argv[8]) s.partial1Mult = parseFloat(process.argv[8]);
+if (process.argv[9]) s.partial2Mult = parseFloat(process.argv[9]);
 
 backtest(symbol, tf, months).catch((err) => {
   console.error("Backtest failed:", err.message);

@@ -9,8 +9,9 @@ const state = {
   entryAtr: null,
   activeSl: null,
   activeTp: null,
-  partialTp: null,
-  partialDone: false,
+  partial1: null,
+  partial2: null,
+  partialLevel: 0,   // 0 = none, 1 = first partial done, 2 = both done
   highestSince: null,
   lowestSince: null,
   barsInTrade: 0,
@@ -75,7 +76,7 @@ async function tick() {
     state.shortTriggered = false;
     state.entryPrice = null;
     state.barsInTrade = 0;
-    state.partialDone = false;
+    state.partialLevel = 0;
   }
 
   // Reset triggers on Supertrend flip
@@ -96,8 +97,9 @@ async function tick() {
       state.entryAtr = signal.atrVal;
       state.activeSl = decision.sl;
       state.activeTp = decision.tp;
-      state.partialTp = decision.partialTp;
-      state.partialDone = false;
+      state.partial1 = decision.partial1;
+      state.partial2 = decision.partial2;
+      state.partialLevel = 0;
       state.highestSince = signal.price;
       state.lowestSince = signal.price;
       state.barsInTrade = 0;
@@ -105,7 +107,7 @@ async function tick() {
 
       await exchange.setTradingStop(symbol, decision.sl, decision.tp);
       log.info(
-        `LONG ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | Partial: ${decision.partialTp.toFixed(2)}`
+        `LONG ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | P1: ${decision.partial1.toFixed(2)} | P2: ${decision.partial2.toFixed(2)}`
       );
       break;
     }
@@ -117,8 +119,9 @@ async function tick() {
       state.entryAtr = signal.atrVal;
       state.activeSl = decision.sl;
       state.activeTp = decision.tp;
-      state.partialTp = decision.partialTp;
-      state.partialDone = false;
+      state.partial1 = decision.partial1;
+      state.partial2 = decision.partial2;
+      state.partialLevel = 0;
       state.highestSince = signal.price;
       state.lowestSince = signal.price;
       state.barsInTrade = 0;
@@ -126,19 +129,28 @@ async function tick() {
 
       await exchange.setTradingStop(symbol, decision.sl, decision.tp);
       log.info(
-        `SHORT ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | Partial: ${decision.partialTp.toFixed(2)}`
+        `SHORT ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | P1: ${decision.partial1.toFixed(2)} | P2: ${decision.partial2.toFixed(2)}`
       );
       break;
     }
 
-    case "partial_close": {
-      const closeQty = (position.size * config.strategy.partialPct).toFixed(4);
+    case "partial_close_1": {
+      const closeQty = (position.size * config.strategy.partial1Pct).toFixed(4);
       const closeSide = position.side === "Buy" ? "Sell" : "Buy";
       await exchange.reduceOrder(symbol, closeSide, closeQty);
-      state.partialDone = true;
-      state.activeSl = state.entryPrice; // move to breakeven
+      state.partialLevel = 1;
+      log.info(`Partial TP1: closed ${closeQty} (33%) — ${decision.reason}`);
+      break;
+    }
+
+    case "partial_close_2": {
+      const closeQty = (position.size * config.strategy.partial2Pct).toFixed(4);
+      const closeSide = position.side === "Buy" ? "Sell" : "Buy";
+      await exchange.reduceOrder(symbol, closeSide, closeQty);
+      state.partialLevel = 2;
+      state.activeSl = state.entryPrice; // move to breakeven after both partials
       await exchange.setTradingStop(symbol, state.entryPrice, state.activeTp);
-      log.info(`Partial TP: closed ${closeQty} — SL moved to breakeven ${state.entryPrice}`);
+      log.info(`Partial TP2: closed ${closeQty} (33%) — SL to BE — ${decision.reason}`);
       break;
     }
 
