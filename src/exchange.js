@@ -23,6 +23,10 @@ async function getCandles(symbol, interval, limit = 200) {
     limit,
   });
 
+  if (!result?.list?.length) {
+    throw new Error(`No candle data returned for ${symbol} ${interval}`);
+  }
+
   // Bybit returns newest first — reverse to oldest first
   return result.list
     .map((c) => ({
