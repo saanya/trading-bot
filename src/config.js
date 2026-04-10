@@ -35,7 +35,7 @@ module.exports = {
     stochK: 3,
     stochD: 3,
     rsiLen: 14,
-    osLevel: 40,
+    osLevel: 50,
 
     // ADX
     useAdx: true,
@@ -78,7 +78,7 @@ module.exports = {
     skipDays: [1, 2],      // skip Monday + Tuesday (worst days)
 
     // Smart Exit
-    cooldownBars: 5,
+    cooldownBars: 2,
     maxBarsTrade: 40,
     beOnStFlip: true,
     minBarsReentry: 3,

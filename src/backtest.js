@@ -140,6 +140,8 @@ async function backtest(symbol, tfMinutes, months) {
   const atrValues = ind.atr(highs, lows, closes, 14);
   const dmiResult = ind.dmi(highs, lows, closes, s.adxLen);
   const volSma = ind.sma(volumes, s.volSmaLen);
+  const emaFast = ind.ema(closes, 21);
+  const emaSlow = ind.ema(closes, 50);
 
   // ─── SIMULATION ──────────────────────────────────────────────────────────
 
@@ -149,6 +151,7 @@ async function backtest(symbol, tfMinutes, months) {
   let shortTriggered = false;
   let barsSinceLoss = 999;
   let barsSinceClose = 999;
+  let lastTradeWin = false;
   let equity = 1000;
   const equityCurve = [];
   const COMMISSION = 0.0004; // 0.04% taker
@@ -252,6 +255,7 @@ async function backtest(symbol, tfMinutes, months) {
           equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
           position.partialLevel = 1;
           position.sizeMultiplier -= s.partial1Pct;
+          position.partial1Time = ts;
         }
       }
       if (!exitReason && s.usePartial && position.partialLevel === 1) {
@@ -263,6 +267,7 @@ async function backtest(symbol, tfMinutes, months) {
           equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial2Pct;
           position.partialLevel = 2;
           position.sizeMultiplier -= s.partial2Pct;
+          position.partial2Time = ts;
           position.sl = position.entryPrice; // move SL to BE after both partials
         }
       }
@@ -320,13 +325,34 @@ async function backtest(symbol, tfMinutes, months) {
       const sessionOk = isSessionOk(ts);
       const dowOk = isDowOk(ts);
 
+      // Original StochRSI entry
       const longSig = aboveVwap && stBullish && kCrossUp && stochLongOk && adxOk && diLongOk && volOk
         && mtf.htfBullish && !mtf.htfConflict && cooldownOk && reentryOk && !longTriggered && sessionOk && dowOk;
 
       const shortSig = belowVwap && stBearish && kCrossDown && stochShortOk && adxOk && diShortOk && volOk
         && mtf.htfBearish && !mtf.htfConflict && cooldownOk && reentryOk && !shortTriggered && sessionOk && dowOk;
 
-      if (longSig) {
+      // EMA pullback entry: price touches EMA21 in trend, bounces back + StochRSI in zone
+      let emaPullbackLong = false;
+      let emaPullbackShort = false;
+      if (s.useEmaPullback && emaFast[i] !== null && emaSlow[i] !== null) {
+        const stochInLongZone = stochRsi.k[i] !== null && stochRsi.k[i] < 50; // oversold-ish
+        const touchedEma = low <= emaFast[i] && price > emaFast[i]; // wick touched EMA, closed above
+        const trendUp = emaFast[i] > emaSlow[i];
+        emaPullbackLong = touchedEma && trendUp && stochInLongZone && stBullish && aboveVwap && adxOk && diLongOk && volOk
+          && mtf.htfBullish && !mtf.htfConflict && cooldownOk && reentryOk && !longTriggered && sessionOk && dowOk;
+
+        const stochInShortZone = stochRsi.k[i] !== null && stochRsi.k[i] > 50; // overbought-ish
+        const touchedEmaShort = high >= emaFast[i] && price < emaFast[i]; // wick touched EMA, closed below
+        const trendDown = emaFast[i] < emaSlow[i];
+        emaPullbackShort = touchedEmaShort && trendDown && stochInShortZone && stBearish && belowVwap && adxOk && diShortOk && volOk
+          && mtf.htfBearish && !mtf.htfConflict && cooldownOk && reentryOk && !shortTriggered && sessionOk && dowOk;
+      }
+
+      const entryLong = longSig || emaPullbackLong;
+      const entryShort = shortSig || emaPullbackShort;
+
+      if (entryLong) {
         position = {
           side: "Buy",
           entryPrice: price,
@@ -344,7 +370,7 @@ async function backtest(symbol, tfMinutes, months) {
         };
         longTriggered = true;
         equity -= equity * COMMISSION; // entry commission
-      } else if (shortSig) {
+      } else if (entryShort) {
         position = {
           side: "Sell",
           entryPrice: price,
@@ -389,14 +415,26 @@ async function backtest(symbol, tfMinutes, months) {
       barsHeld: barIdx - pos.entryBar,
       reason,
       partialClosed: pos.partialLevel > 0,
+      partialLevel: pos.partialLevel,
+      partial1Time: pos.partial1Time ? new Date(pos.partial1Time).toISOString() : null,
+      partial2Time: pos.partial2Time ? new Date(pos.partial2Time).toISOString() : null,
       entryTime: new Date(pos.entryTimestamp).toISOString(),
       exitTime: new Date(ltfCandles[barIdx].timestamp).toISOString(),
     });
 
     if (pnlPct < 0) barsSinceLoss = 0;
     barsSinceClose = 0;
-    longTriggered = false;
-    shortTriggered = false;
+    lastTradeWin = pnlPct > 0;
+    // Re-entry after win: reset trigger to allow same-direction re-entry
+    if (s.reentryAfterWin && lastTradeWin) {
+      longTriggered = false;
+      shortTriggered = false;
+    }
+    // Normal: always reset triggers on close (default behavior)
+    if (!s.reentryAfterWin) {
+      longTriggered = false;
+      shortTriggered = false;
+    }
     position = null;
   }
 
@@ -491,13 +529,15 @@ function printReport(trades, finalEquity, equityCurve, symbol, tf, months) {
   if (trades.length > 0) {
     console.log(`\n  ALL TRADES (${trades.length})`);
     console.log(`  ${"─".repeat(85)}`);
-    console.log(`  ${"#".padEnd(4)} ${"Side".padEnd(6)} ${"Entry".padEnd(12)} ${"Exit".padEnd(12)} ${"P&L%".padEnd(8)} ${"R".padEnd(6)} ${"Bars".padEnd(5)} ${"Date".padEnd(20)} Reason`);
+    console.log(`  ${"#".padEnd(4)} ${"Side".padEnd(6)} ${"Entry".padEnd(12)} ${"Exit".padEnd(12)} ${"P&L%".padEnd(8)} ${"R".padEnd(6)} ${"Bars".padEnd(5)} ${"Opened".padEnd(18)} ${"TP1".padEnd(18)} ${"TP2".padEnd(18)} ${"Closed".padEnd(18)} Reason`);
     for (let ti = 0; ti < trades.length; ti++) { const t = trades[ti];
       const side = t.side === "Buy" ? "LONG" : "SHORT";
-      const result = t.pnlPct > 0 ? "WIN" : t.pnlPct < -0.01 ? "LOSS" : "BE";
-      const date = t.entryTime ? t.entryTime.slice(0, 16).replace("T", " ") : "";
+      const opened = t.entryTime ? t.entryTime.slice(0, 16).replace("T", " ") : "";
+      const closed = t.exitTime ? t.exitTime.slice(0, 16).replace("T", " ") : "";
+      const tp1 = t.partial1Time ? t.partial1Time.slice(0, 16).replace("T", " ") : "—";
+      const tp2 = t.partial2Time ? t.partial2Time.slice(0, 16).replace("T", " ") : "—";
       console.log(
-        `  ${String(ti + 1).padEnd(4)} ${side.padEnd(6)} ${t.entryPrice.toFixed(6).padEnd(12)} ${t.exitPrice.toFixed(6).padEnd(12)} ${t.pnlPct.toFixed(2).padEnd(8)} ${t.rMultiple.toFixed(1).padEnd(6)} ${String(t.barsHeld).padEnd(5)} ${date.padEnd(20)} ${t.reason}`
+        `  ${String(ti + 1).padEnd(4)} ${side.padEnd(6)} ${t.entryPrice.toFixed(6).padEnd(12)} ${t.exitPrice.toFixed(6).padEnd(12)} ${t.pnlPct.toFixed(2).padEnd(8)} ${t.rMultiple.toFixed(1).padEnd(6)} ${String(t.barsHeld).padEnd(5)} ${opened.padEnd(18)} ${tp1.padEnd(18)} ${tp2.padEnd(18)} ${closed.padEnd(18)} ${t.reason}`
       );
     }
   }
@@ -528,6 +568,11 @@ if (args.toxichours !== undefined) s.sessionSkipHours = args.toxichours ? args.t
 if (args.dow !== undefined) { s.useDowFilter = !!args.dow; s.skipDays = args.dow ? args.dow.split(",").map(Number) : []; }
 if (args.volmax !== undefined) s.volMaxMult = parseFloat(args.volmax);
 if (args.maxbars) s.maxBarsTrade = parseInt(args.maxbars);
+if (args.reentry !== undefined) s.reentryAfterWin = args.reentry === "1";
+if (args.emapb !== undefined) s.useEmaPullback = args.emapb === "1";
+if (args.stfactor) s.stFactor = parseFloat(args.stfactor);
+if (args.os) s.osLevel = parseInt(args.os);
+if (args.cooldown) s.cooldownBars = parseInt(args.cooldown);
 
 backtest(symbol, tf, months).catch((err) => {
   console.error("Backtest failed:", err.message);
