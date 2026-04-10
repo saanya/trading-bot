@@ -2,6 +2,7 @@ const config = require("./config");
 const exchange = require("./exchange");
 const strategy = require("./strategy");
 const log = require("./logger");
+const tg = require("./telegram");
 
 // Persistent state across ticks
 const state = {
@@ -109,6 +110,7 @@ async function tick() {
       log.info(
         `LONG ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | P1: ${decision.partial1.toFixed(2)} | P2: ${decision.partial2.toFixed(2)}`
       );
+      tg.notifyOpen(symbol, "Buy", signal.price, decision.sl, decision.tp, decision.partial1, decision.partial2);
       break;
     }
 
@@ -131,6 +133,7 @@ async function tick() {
       log.info(
         `SHORT ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | P1: ${decision.partial1.toFixed(2)} | P2: ${decision.partial2.toFixed(2)}`
       );
+      tg.notifyOpen(symbol, "Sell", signal.price, decision.sl, decision.tp, decision.partial1, decision.partial2);
       break;
     }
 
@@ -140,6 +143,7 @@ async function tick() {
       await exchange.reduceOrder(symbol, closeSide, closeQty);
       state.partialLevel = 1;
       log.info(`Partial TP1: closed ${closeQty} (33%) — ${decision.reason}`);
+      tg.notifyPartial(symbol, 1, closeQty, decision.reason);
       break;
     }
 
@@ -151,6 +155,7 @@ async function tick() {
       state.activeSl = state.entryPrice; // move to breakeven after both partials
       await exchange.setTradingStop(symbol, state.entryPrice, state.activeTp);
       log.info(`Partial TP2: closed ${closeQty} (33%) — SL to BE — ${decision.reason}`);
+      tg.notifyPartial(symbol, 2, closeQty, decision.reason);
       break;
     }
 
@@ -167,6 +172,7 @@ async function tick() {
       if (pnl < 0) state.barsSinceLoss = 0;
       state.barsSinceClose = 0;
       log.info(`Position closed — PnL: ${pnl} — ${decision.reason}`);
+      tg.notifyClose(symbol, position?.side || "Buy", state.entryPrice || 0, signal.price, pnl, decision.reason, state.barsInTrade);
       break;
     }
 

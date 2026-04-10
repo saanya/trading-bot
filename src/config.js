@@ -14,6 +14,10 @@ module.exports = {
   dryRun: process.env.DRY_RUN === "true",
   logLevel: process.env.LOG_LEVEL || "info",
 
+  // Telegram
+  telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
+
   // Strategy params (matching Pine Script v3 defaults)
   strategy: {
     // HTF Trend
