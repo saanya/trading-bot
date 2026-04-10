@@ -487,15 +487,17 @@ function printReport(trades, finalEquity, equityCurve, symbol, tf, months) {
     console.log(`  ${reason.padEnd(22)} ${count}`);
   }
 
-  // Last 10 trades
+  // All trades
   if (trades.length > 0) {
-    console.log(`\n  RECENT TRADES`);
-    console.log(`  ${"─".repeat(70)}`);
-    console.log(`  ${"Side".padEnd(6)} ${"Entry".padEnd(12)} ${"Exit".padEnd(12)} ${"P&L%".padEnd(8)} ${"R".padEnd(6)} ${"Bars".padEnd(5)} Reason`);
-    for (const t of trades.slice(-15)) {
+    console.log(`\n  ALL TRADES (${trades.length})`);
+    console.log(`  ${"─".repeat(85)}`);
+    console.log(`  ${"#".padEnd(4)} ${"Side".padEnd(6)} ${"Entry".padEnd(12)} ${"Exit".padEnd(12)} ${"P&L%".padEnd(8)} ${"R".padEnd(6)} ${"Bars".padEnd(5)} ${"Date".padEnd(20)} Reason`);
+    for (let ti = 0; ti < trades.length; ti++) { const t = trades[ti];
       const side = t.side === "Buy" ? "LONG" : "SHORT";
+      const result = t.pnlPct > 0 ? "WIN" : t.pnlPct < -0.01 ? "LOSS" : "BE";
+      const date = t.entryTime ? t.entryTime.slice(0, 16).replace("T", " ") : "";
       console.log(
-        `  ${side.padEnd(6)} ${t.entryPrice.toFixed(6).padEnd(12)} ${t.exitPrice.toFixed(6).padEnd(12)} ${t.pnlPct.toFixed(2).padEnd(8)} ${t.rMultiple.toFixed(1).padEnd(6)} ${String(t.barsHeld).padEnd(5)} ${t.reason}`
+        `  ${String(ti + 1).padEnd(4)} ${side.padEnd(6)} ${t.entryPrice.toFixed(6).padEnd(12)} ${t.exitPrice.toFixed(6).padEnd(12)} ${t.pnlPct.toFixed(2).padEnd(8)} ${t.rMultiple.toFixed(1).padEnd(6)} ${String(t.barsHeld).padEnd(5)} ${date.padEnd(20)} ${t.reason}`
       );
     }
   }
