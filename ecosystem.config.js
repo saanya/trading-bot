@@ -10,10 +10,5 @@ module.exports = {
       script: "src/index.js",
       env: { SYMBOL: "APTUSDT" },
     },
-    {
-      name: "bot-TIA",
-      script: "src/index.js",
-      env: { SYMBOL: "TIAUSDT" },
-    },
   ],
 };
