@@ -15,29 +15,35 @@ const client = new RestClientV5({
  * @param {number} limit - max 1000
  * @returns {Array<{timestamp, open, high, low, close, volume}>}
  */
-async function getCandles(symbol, interval, limit = 200) {
-  const { result } = await client.getKline({
-    category: "linear",
-    symbol,
-    interval,
-    limit,
-  });
+async function getCandles(symbol, interval, limit = 200, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const { result } = await client.getKline({
+      category: "linear",
+      symbol,
+      interval,
+      limit,
+    });
 
-  if (!result?.list?.length) {
-    throw new Error(`No candle data returned for ${symbol} ${interval}`);
+    if (result?.list?.length) {
+      return result.list
+        .map((c) => ({
+          timestamp: parseInt(c[0]),
+          open: parseFloat(c[1]),
+          high: parseFloat(c[2]),
+          low: parseFloat(c[3]),
+          close: parseFloat(c[4]),
+          volume: parseFloat(c[5]),
+        }))
+        .reverse();
+    }
+
+    if (attempt < retries) {
+      log.warn(`No candle data for ${symbol} ${interval}, retry ${attempt}/${retries}...`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
   }
 
-  // Bybit returns newest first — reverse to oldest first
-  return result.list
-    .map((c) => ({
-      timestamp: parseInt(c[0]),
-      open: parseFloat(c[1]),
-      high: parseFloat(c[2]),
-      low: parseFloat(c[3]),
-      close: parseFloat(c[4]),
-      volume: parseFloat(c[5]),
-    }))
-    .reverse();
+  throw new Error(`No candle data returned for ${symbol} ${interval} after ${retries} retries`);
 }
 
 /**
