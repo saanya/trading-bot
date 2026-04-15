@@ -53,10 +53,11 @@ function notifyPartial(symbol, level, qty, reason) {
 function notifyClose(symbol, side, entryPrice, exitPrice, pnl, reason, barsHeld) {
   const icon = pnl >= 0 ? "✅" : "❌";
   const dir = side === "Buy" ? "LONG" : "SHORT";
+  const pnlDisplay = typeof pnl === "number" ? pnl.toFixed(4) : pnl;
   send(
     `${icon} *${symbol}* ${dir} closed\n` +
     `Entry: \`${entryPrice.toFixed(4)}\` → Exit: \`${exitPrice.toFixed(4)}\`\n` +
-    `PnL: \`${pnl}\` | Reason: ${reason}\n` +
+    `PnL: \`${pnlDisplay} USDT\` | Reason: ${reason}\n` +
     `Duration: ${barsHeld} bars`
   );
 }

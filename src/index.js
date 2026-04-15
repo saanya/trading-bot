@@ -3,6 +3,9 @@ const exchange = require("./exchange");
 const strategy = require("./strategy");
 const log = require("./logger");
 const tg = require("./telegram");
+const s = config.strategy;
+
+let tickRunning = false;
 
 // Persistent state across ticks
 const state = {
@@ -20,8 +23,22 @@ const state = {
   barsSinceClose: 999,
   longTriggered: false,
   shortTriggered: false,
-  lastTradeCount: 0,
 };
+
+function resetTradeState() {
+  state.entryPrice = null;
+  state.entryAtr = null;
+  state.activeSl = null;
+  state.activeTp = null;
+  state.partial1 = null;
+  state.partial2 = null;
+  state.partialLevel = 0;
+  state.highestSince = null;
+  state.lowestSince = null;
+  state.barsInTrade = 0;
+  state.longTriggered = false;
+  state.shortTriggered = false;
+}
 
 function trendLabel(t) {
   return t === 1 ? "BULL" : t === -1 ? "BEAR" : "FLAT";
@@ -31,6 +48,7 @@ function trendLabel(t) {
  * Main bot tick — runs once per candle close
  */
 async function tick() {
+  tickRunning = true;
   const { symbol, timeframe } = config;
 
   // Fetch candle data: LTF + HTF
@@ -66,18 +84,24 @@ async function tick() {
     } else {
       state.lowestSince = Math.min(state.lowestSince || Infinity, signal.price);
     }
+  } else if (state.entryPrice !== null) {
+    // Exchange closed position (server-side SL/TP)
+    const isLong = state.activeSl < state.entryPrice;
+    const pnlPositive = isLong ? signal.price >= state.entryPrice : signal.price <= state.entryPrice;
+    const reason = pnlPositive ? "Exchange TP hit" : "Exchange SL hit";
+    const estimatedExit = pnlPositive ? state.activeTp : state.activeSl;
+    const pnlPct = isLong
+      ? (estimatedExit - state.entryPrice) / state.entryPrice
+      : (state.entryPrice - estimatedExit) / state.entryPrice;
+    const pnl = pnlPct * config.positionSize;
+    log.info(`${reason} — ${isLong ? "LONG" : "SHORT"} ${symbol} — est. PnL: ${pnl.toFixed(4)}`);
+    tg.notifyClose(symbol, isLong ? "Buy" : "Sell", state.entryPrice, estimatedExit, pnl, reason, state.barsInTrade);
+    if (!pnlPositive) state.barsSinceLoss = 0;
+    state.barsSinceClose = 0;
+    resetTradeState();
   } else {
     state.barsSinceClose++;
     state.barsSinceLoss++;
-  }
-
-  // Reset triggers when not in position
-  if (!position && state.entryPrice !== null) {
-    state.longTriggered = false;
-    state.shortTriggered = false;
-    state.entryPrice = null;
-    state.barsInTrade = 0;
-    state.partialLevel = 0;
   }
 
   // Reset triggers on Supertrend flip
@@ -173,6 +197,7 @@ async function tick() {
       state.barsSinceClose = 0;
       log.info(`Position closed — PnL: ${pnl} — ${decision.reason}`);
       tg.notifyClose(symbol, position?.side || "Buy", state.entryPrice || 0, signal.price, pnl, decision.reason, state.barsInTrade);
+      resetTradeState();
       break;
     }
 
@@ -183,6 +208,140 @@ async function tick() {
     case "none":
       log.debug("No signal, waiting...");
       break;
+  }
+  tickRunning = false;
+}
+
+/**
+ * Lightweight 1-minute position management tick
+ * Checks partials, trailing stop, and exchange-side closures
+ */
+async function manageTick() {
+  if (tickRunning) return;
+
+  const { symbol } = config;
+
+  try {
+    const [price, position] = await Promise.all([
+      exchange.getTicker(symbol),
+      exchange.getPosition(symbol),
+    ]);
+
+    // Exchange-side closure detection
+    if (!position && state.entryPrice !== null) {
+      const isLong = state.activeSl < state.entryPrice;
+      const pnlPositive = isLong ? price >= state.entryPrice : price <= state.entryPrice;
+      const reason = pnlPositive ? "Exchange TP hit" : "Exchange SL hit";
+      const estimatedExit = pnlPositive ? state.activeTp : state.activeSl;
+      const pnlPct = isLong
+        ? (estimatedExit - state.entryPrice) / state.entryPrice
+        : (state.entryPrice - estimatedExit) / state.entryPrice;
+      const pnl = pnlPct * config.positionSize;
+
+      log.info(`[manageTick] ${reason} — ${isLong ? "LONG" : "SHORT"} ${symbol} — est. PnL: ${pnl.toFixed(4)}`);
+      tg.notifyClose(symbol, isLong ? "Buy" : "Sell", state.entryPrice, estimatedExit, pnl, reason, state.barsInTrade);
+
+      if (!pnlPositive) state.barsSinceLoss = 0;
+      state.barsSinceClose = 0;
+      resetTradeState();
+      return;
+    }
+
+    // Nothing to manage
+    if (!position || !state.entryAtr) return;
+
+    const isLong = position.side === "Buy";
+    const entryPrice = state.entryPrice || position.entryPrice;
+    const entryAtr = state.entryAtr;
+
+    // Update highest/lowest with live price
+    if (isLong) {
+      state.highestSince = Math.max(state.highestSince || 0, price);
+    } else {
+      state.lowestSince = Math.min(state.lowestSince || Infinity, price);
+    }
+
+    const unrealizedR = isLong
+      ? (price - entryPrice) / entryAtr
+      : (entryPrice - price) / entryAtr;
+
+    // Partial TP1
+    if (s.usePartial && state.partialLevel < 1) {
+      if ((isLong && price >= state.partial1) || (!isLong && price <= state.partial1)) {
+        const closeQty = (position.size * s.partial1Pct).toFixed(4);
+        const closeSide = isLong ? "Sell" : "Buy";
+        await exchange.reduceOrder(symbol, closeSide, closeQty);
+        state.partialLevel = 1;
+        const reason = `Partial TP1 at ${unrealizedR.toFixed(1)}R`;
+        log.info(`[manageTick] ${reason} — closed ${closeQty}`);
+        tg.notifyPartial(symbol, 1, closeQty, reason);
+        return;
+      }
+    }
+
+    // Partial TP2
+    if (s.usePartial && state.partialLevel === 1) {
+      if ((isLong && price >= state.partial2) || (!isLong && price <= state.partial2)) {
+        const closeQty = (position.size * s.partial2Pct).toFixed(4);
+        const closeSide = isLong ? "Sell" : "Buy";
+        await exchange.reduceOrder(symbol, closeSide, closeQty);
+        state.partialLevel = 2;
+        state.activeSl = entryPrice;
+        await exchange.setTradingStop(symbol, entryPrice, state.activeTp);
+        const reason = `Partial TP2 at ${unrealizedR.toFixed(1)}R`;
+        log.info(`[manageTick] ${reason} — closed ${closeQty} — SL to BE`);
+        tg.notifyPartial(symbol, 2, closeQty, reason);
+        return;
+      }
+    }
+
+    // Progressive trailing stop
+    if (s.useTrailRest && state.partialLevel >= 1) {
+      // Move SL to breakeven at +1R
+      if (unrealizedR >= s.trailBeR && state.activeSl !== entryPrice) {
+        state.activeSl = entryPrice;
+        await exchange.setTradingStop(symbol, entryPrice, state.activeTp);
+        log.info(`[manageTick] SL → BE at ${unrealizedR.toFixed(1)}R`);
+        return;
+      }
+
+      // Active trailing at +2R
+      if (unrealizedR >= s.trailStartR) {
+        let trailSl, trailHit;
+
+        if (isLong) {
+          trailSl = Math.max(entryPrice, state.highestSince - entryAtr * s.trailAtrMult);
+          trailHit = price <= trailSl;
+        } else {
+          trailSl = Math.min(entryPrice, state.lowestSince + entryAtr * s.trailAtrMult);
+          trailHit = price >= trailSl;
+        }
+
+        if (trailHit) {
+          await exchange.closePosition(symbol);
+          const pnl = position.unrealisedPnl;
+          const reason = `Trailing stop at ${unrealizedR.toFixed(1)}R`;
+          log.info(`[manageTick] ${reason}`);
+          tg.notifyClose(symbol, position.side, entryPrice, price, pnl, reason, state.barsInTrade);
+          if (pnl < 0) state.barsSinceLoss = 0;
+          state.barsSinceClose = 0;
+          resetTradeState();
+          return;
+        }
+
+        // Update exchange-side SL if trail improved
+        const slImproved = isLong ? trailSl > state.activeSl : trailSl < state.activeSl;
+        if (slImproved) {
+          state.activeSl = trailSl;
+          await exchange.setTradingStop(symbol, trailSl, state.activeTp);
+          log.debug(`[manageTick] Trail SL → ${trailSl.toFixed(4)}`);
+        }
+      }
+    }
+
+    log.debug(`[manageTick] ${symbol} @ ${price} | ${unrealizedR.toFixed(1)}R`);
+  } catch (err) {
+    log.warn(`[manageTick] Error: ${err.message}`);
   }
 }
 
@@ -220,6 +379,7 @@ async function main() {
     await tick();
   } catch (err) {
     log.error(`Tick error: ${err.message}`);
+    tickRunning = false;
   }
 
   // Schedule ticks aligned to candle close
@@ -233,12 +393,16 @@ async function main() {
         await tick();
       } catch (err) {
         log.error(`Tick error: ${err.message}`);
+        tickRunning = false;
       }
       scheduleNext();
     }, wait);
   }
 
   scheduleNext();
+
+  // 1-minute position management (partials, trailing, closure detection)
+  setInterval(() => manageTick().catch(err => log.error(`[manageTick] Fatal: ${err.message}`)), 60000);
 }
 
 main().catch((err) => {

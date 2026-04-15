@@ -82,16 +82,26 @@ async function backtest(symbol, tfMinutes, months) {
 
   console.log(`\nFetching ${symbol} data (${months} months, ${interval}m)...\n`);
 
-  // Fetch all candle data
-  const [ltfCandles, dCandles, wCandles, mCandles] = await Promise.all([
+  // Fetch all candle data (including 1m for intrabar position management)
+  const [ltfCandles, oneMinCandles, dCandles, wCandles, mCandles] = await Promise.all([
     fetchAllCandles(symbol, interval, startTime, now),
+    fetchAllCandles(symbol, "1", startTime, now),
     fetchAllCandles(symbol, "D", startTime - 120 * 86400000, now), // extra history for EMA warmup
     fetchAllCandles(symbol, "W", startTime - 365 * 86400000, now),
     fetchAllCandles(symbol, "M", startTime - 730 * 86400000, now),
   ]);
 
+  // Build 1m candle lookup: 15m bar start timestamp → array of 1m candles within it
+  const barMs = tfMinutes * 60000;
+  const minutesByBar = new Map();
+  for (const c of oneMinCandles) {
+    const barTs = Math.floor(c.timestamp / barMs) * barMs;
+    if (!minutesByBar.has(barTs)) minutesByBar.set(barTs, []);
+    minutesByBar.get(barTs).push(c);
+  }
+
   console.log(
-    `Candles loaded — LTF: ${ltfCandles.length} | D: ${dCandles.length} | W: ${wCandles.length} | M: ${mCandles.length}`
+    `Candles loaded — LTF: ${ltfCandles.length} | 1m: ${oneMinCandles.length} | D: ${dCandles.length} | W: ${wCandles.length} | M: ${mCandles.length}`
   );
 
   // Pre-compute HTF EMAs for the full period
@@ -212,101 +222,136 @@ async function backtest(symbol, tfMinutes, months) {
     if (stFlipBear) longTriggered = false;
     if (stFlipBull) shortTriggered = false;
 
-    // ─── EXITS (check before entries) ─────────────────────────────
+    // ─── EXITS (1m intrabar simulation) ─────────────────────────────
 
     if (position) {
       const isLong = position.side === "Buy";
       const barsHeld = i - position.entryBar;
-      const unrealizedR = isLong
-        ? (price - position.entryPrice) / position.entryAtr
-        : (position.entryPrice - price) / position.entryAtr;
-      const inProfit = unrealizedR > 0;
-
       let exitReason = null;
 
-      // Update highest/lowest
-      if (isLong) position.highest = Math.max(position.highest, high);
-      else position.lowest = Math.min(position.lowest, low);
+      // Get 1m candles for this 15m bar
+      const minuteCandles = minutesByBar.get(ts) || [];
 
-      // Check SL hit (use low for longs, high for shorts for more accurate sim)
-      if (isLong && low <= position.sl) {
-        exitReason = "Stop Loss";
-        // Estimate exit at SL price, not close
-        closeTrade(position, Math.max(position.sl, low), i, exitReason);
-      } else if (!isLong && high >= position.sl) {
-        exitReason = "Stop Loss";
-        closeTrade(position, Math.min(position.sl, high), i, exitReason);
-      }
-      // Check TP hit
-      else if (isLong && high >= position.tp) {
-        exitReason = "Take Profit";
-        closeTrade(position, Math.min(position.tp, high), i, exitReason);
-      } else if (!isLong && low <= position.tp) {
-        exitReason = "Take Profit";
-        closeTrade(position, Math.max(position.tp, low), i, exitReason);
-      }
-      // Multi-level Partial TP
-      else if (s.usePartial && position.partialLevel < 1) {
-        if ((isLong && high >= position.partial1) || (!isLong && low <= position.partial1)) {
-          const exitP = isLong ? position.partial1 : position.partial1;
-          const partialPnl = isLong
-            ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct
-            : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
-          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
-          position.partialLevel = 1;
-          position.sizeMultiplier -= s.partial1Pct;
-          position.partial1Time = ts;
+      // Process each 1m candle for position management
+      for (const mc of minuteCandles) {
+        if (exitReason) break;
+
+        const mPrice = mc.close;
+        const mHigh = mc.high;
+        const mLow = mc.low;
+
+        // Update highest/lowest
+        if (isLong) position.highest = Math.max(position.highest, mHigh);
+        else position.lowest = Math.min(position.lowest, mLow);
+
+        const unrealizedR = isLong
+          ? (mPrice - position.entryPrice) / position.entryAtr
+          : (position.entryPrice - mPrice) / position.entryAtr;
+
+        // Check SL hit
+        if (isLong && mLow <= position.sl) {
+          exitReason = "Stop Loss";
+          closeTrade(position, Math.max(position.sl, mLow), i, exitReason);
+          break;
+        } else if (!isLong && mHigh >= position.sl) {
+          exitReason = "Stop Loss";
+          closeTrade(position, Math.min(position.sl, mHigh), i, exitReason);
+          break;
         }
-      }
-      if (!exitReason && s.usePartial && position.partialLevel === 1) {
-        if ((isLong && high >= position.partial2) || (!isLong && low <= position.partial2)) {
-          const exitP = position.partial2;
-          const partialPnl = isLong
-            ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial2Pct
-            : ((position.entryPrice - exitP) / position.entryPrice) * s.partial2Pct;
-          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial2Pct;
-          position.partialLevel = 2;
-          position.sizeMultiplier -= s.partial2Pct;
-          position.partial2Time = ts;
-          position.sl = position.entryPrice; // move SL to BE after both partials
+
+        // Check TP hit
+        if (isLong && mHigh >= position.tp) {
+          exitReason = "Take Profit";
+          closeTrade(position, Math.min(position.tp, mHigh), i, exitReason);
+          break;
+        } else if (!isLong && mLow <= position.tp) {
+          exitReason = "Take Profit";
+          closeTrade(position, Math.max(position.tp, mLow), i, exitReason);
+          break;
         }
-      }
-      // Progressive Trailing Stop
-      if (!exitReason && s.useTrailRest && position.partialLevel >= 1) {
-        // Move SL to breakeven at trailBeR
-        if (unrealizedR >= s.trailBeR) {
-          if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
-          else position.sl = Math.min(position.sl, position.entryPrice);
+
+        // Multi-level Partial TP
+        if (s.usePartial && position.partialLevel < 1) {
+          if ((isLong && mHigh >= position.partial1) || (!isLong && mLow <= position.partial1)) {
+            const exitP = position.partial1;
+            const partialPnl = isLong
+              ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct
+              : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
+            equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
+            position.partialLevel = 1;
+            position.sizeMultiplier -= s.partial1Pct;
+            position.partial1Time = mc.timestamp;
+          }
         }
-        // Active trailing at trailStartR
-        if (unrealizedR >= s.trailStartR) {
-          if (isLong) {
-            const trailSl = Math.max(position.entryPrice, position.highest - position.entryAtr * s.trailAtrMult);
-            position.sl = Math.max(position.sl, trailSl);
-          } else {
-            const trailSl = Math.min(position.entryPrice, position.lowest + position.entryAtr * s.trailAtrMult);
-            position.sl = Math.min(position.sl, trailSl);
+        if (s.usePartial && position.partialLevel === 1) {
+          if ((isLong && mHigh >= position.partial2) || (!isLong && mLow <= position.partial2)) {
+            const exitP = position.partial2;
+            const partialPnl = isLong
+              ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial2Pct
+              : ((position.entryPrice - exitP) / position.entryPrice) * s.partial2Pct;
+            equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial2Pct;
+            position.partialLevel = 2;
+            position.sizeMultiplier -= s.partial2Pct;
+            position.partial2Time = mc.timestamp;
+            position.sl = position.entryPrice; // move SL to BE after both partials
+          }
+        }
+
+        // Progressive Trailing Stop
+        if (s.useTrailRest && position.partialLevel >= 1) {
+          if (unrealizedR >= s.trailBeR) {
+            if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
+            else position.sl = Math.min(position.sl, position.entryPrice);
+          }
+          if (unrealizedR >= s.trailStartR) {
+            if (isLong) {
+              const trailSl = Math.max(position.entryPrice, position.highest - position.entryAtr * s.trailAtrMult);
+              position.sl = Math.max(position.sl, trailSl);
+            } else {
+              const trailSl = Math.min(position.entryPrice, position.lowest + position.entryAtr * s.trailAtrMult);
+              position.sl = Math.min(position.sl, trailSl);
+            }
           }
         }
       }
-      // Max duration
+
+      // Fallback: if no 1m data for this bar, use 15m high/low (same as before)
+      if (minuteCandles.length === 0 && !exitReason) {
+        if (isLong) position.highest = Math.max(position.highest, high);
+        else position.lowest = Math.min(position.lowest, low);
+
+        if (isLong && low <= position.sl) { exitReason = "Stop Loss"; closeTrade(position, Math.max(position.sl, low), i, exitReason); }
+        else if (!isLong && high >= position.sl) { exitReason = "Stop Loss"; closeTrade(position, Math.min(position.sl, high), i, exitReason); }
+        else if (isLong && high >= position.tp) { exitReason = "Take Profit"; closeTrade(position, Math.min(position.tp, high), i, exitReason); }
+        else if (!isLong && low <= position.tp) { exitReason = "Take Profit"; closeTrade(position, Math.max(position.tp, low), i, exitReason); }
+        else if (s.usePartial && position.partialLevel < 1 && ((isLong && high >= position.partial1) || (!isLong && low <= position.partial1))) {
+          const exitP = position.partial1;
+          const partialPnl = isLong ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
+          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
+          position.partialLevel = 1; position.sizeMultiplier -= s.partial1Pct; position.partial1Time = ts;
+        }
+      }
+
+      // Max duration (checked on 15m bar)
       if (!exitReason && s.maxBarsTrade > 0 && barsHeld >= s.maxBarsTrade) {
         exitReason = "Max Duration";
         closeTrade(position, price, i, exitReason);
       }
-      // Supertrend flip
+      // Supertrend flip (checked on 15m bar)
       if (!exitReason && isLong && stFlipBear) {
-        if (s.beOnStFlip && inProfit) {
+        const unrealizedR = (price - position.entryPrice) / position.entryAtr;
+        if (s.beOnStFlip && unrealizedR > 0) {
           position.sl = Math.max(position.sl, position.entryPrice);
-        } else if (!inProfit) {
+        } else if (unrealizedR <= 0) {
           exitReason = "ST Flip";
           closeTrade(position, price, i, exitReason);
         }
       }
       if (!exitReason && !isLong && stFlipBull) {
-        if (s.beOnStFlip && inProfit) {
+        const unrealizedR = (position.entryPrice - price) / position.entryAtr;
+        if (s.beOnStFlip && unrealizedR > 0) {
           position.sl = Math.min(position.sl, position.entryPrice);
-        } else if (!inProfit) {
+        } else if (unrealizedR <= 0) {
           exitReason = "ST Flip";
           closeTrade(position, price, i, exitReason);
         }

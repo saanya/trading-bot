@@ -10,5 +10,10 @@ module.exports = {
       script: "src/index.js",
       env: { SYMBOL: "APTUSDT" },
     },
+    {
+      name: "bot-DOGE",
+      script: "src/index.js",
+      env: { SYMBOL: "DOGEUSDT" },
+    },
   ],
 };

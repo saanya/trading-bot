@@ -173,6 +173,9 @@ async function getTicker(symbol) {
     category: "linear",
     symbol,
   });
+  if (!result?.list?.[0]?.lastPrice) {
+    throw new Error(`No ticker data for ${symbol}`);
+  }
   return parseFloat(result.list[0].lastPrice);
 }
 
