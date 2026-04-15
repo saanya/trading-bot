@@ -186,6 +186,9 @@ async function backtest(symbol, tfMinutes, months) {
     return !s.skipDays || !s.skipDays.includes(dow);
   }
 
+  // Debug mode: show condition breakdown for non-entry bars
+  const showDebug = process.argv.includes("--debug");
+
   // Start after warmup (need ~50 bars for indicators)
   const warmup = 60;
 
@@ -396,6 +399,20 @@ async function backtest(symbol, tfMinutes, months) {
 
       const entryLong = longSig || emaPullbackLong;
       const entryShort = shortSig || emaPullbackShort;
+
+      // Debug: log condition breakdown for non-entry bars
+      if (showDebug && !entryLong && !entryShort) {
+        const p = (v) => v ? "✓" : "✗";
+        const time = new Date(ts).toISOString().slice(0, 16).replace("T", " ");
+        console.log(
+          `  ${time} | VWAP: ${p(aboveVwap)}↑${p(belowVwap)}↓ | ST: ${stBullish ? "BULL" : "BEAR"} | ` +
+          `StochK: ${p(kCrossUp)}↑${p(kCrossDown)}↓ zone:${p(stochLongOk)}L${p(stochShortOk)}S | ` +
+          `ADX: ${p(adxOk)}(${dmiResult.adx[i]?.toFixed(0)}) DI: ${p(diLongOk)}L${p(diShortOk)}S | ` +
+          `Vol: ${p(volOk)} | HTF: D=${mtf.daily} W=${mtf.weekly} M=${mtf.monthly} bull:${p(mtf.htfBullish)} bear:${p(mtf.htfBearish)} | ` +
+          `CD: ${p(cooldownOk)} RE: ${p(reentryOk)} Ses: ${p(sessionOk)} DoW: ${p(dowOk)} | ` +
+          `Triggered: L=${longTriggered} S=${shortTriggered}`
+        );
+      }
 
       if (entryLong) {
         position = {

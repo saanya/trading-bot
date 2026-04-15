@@ -156,11 +156,21 @@ function analyze(candles, mtf, state) {
     diPlus: dmiResult.diPlus[i],
     diMinus: dmiResult.diMinus[i],
     stochK: stochRsi.k[i],
+    stochD: stochRsi.d[i],
     volOk,
     cooldownOk,
     reentryOk,
     sessionOk,
+    dowOk,
     mtf,
+    // Individual conditions for debug
+    conditions: {
+      aboveVwap, belowVwap,
+      kCrossUp, kCrossDown,
+      stochLongOk, stochShortOk,
+      adxOk, diLongOk, diShortOk,
+      volOk, cooldownOk, reentryOk, sessionOk, dowOk,
+    },
   };
 }
 
