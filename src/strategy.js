@@ -226,8 +226,8 @@ function decide(signal, position, state) {
     }
   }
 
-  // Progressive trailing stop
-  if (s.useTrailRest && state.partialLevel >= 1) {
+  // Progressive trailing stop (activate after TP1 or when partials disabled)
+  if (s.useTrailRest && (state.partialLevel >= 1 || !s.usePartial)) {
     // Move SL to breakeven at +1R (trailBeR)
     if (unrealizedR >= s.trailBeR && state.activeSl !== entryPrice) {
       return { action: "move_sl_be", reason: `Moving SL to BE at ${unrealizedR.toFixed(1)}R` };

@@ -284,6 +284,11 @@ async function backtest(symbol, tfMinutes, months) {
             position.partialLevel = 1;
             position.sizeMultiplier -= s.partial1Pct;
             position.partial1Time = mc.timestamp;
+            // Move SL to BE immediately after TP1
+            if (s.beOnPartial1) {
+              if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
+              else position.sl = Math.min(position.sl, position.entryPrice);
+            }
           }
         }
         if (s.usePartial && position.partialLevel === 1) {
@@ -300,8 +305,8 @@ async function backtest(symbol, tfMinutes, months) {
           }
         }
 
-        // Progressive Trailing Stop
-        if (s.useTrailRest && position.partialLevel >= 1) {
+        // Progressive Trailing Stop (activate after TP1 or when partials disabled)
+        if (s.useTrailRest && (position.partialLevel >= 1 || !s.usePartial)) {
           if (unrealizedR >= s.trailBeR) {
             if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
             else position.sl = Math.min(position.sl, position.entryPrice);
@@ -332,6 +337,10 @@ async function backtest(symbol, tfMinutes, months) {
           const partialPnl = isLong ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
           equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
           position.partialLevel = 1; position.sizeMultiplier -= s.partial1Pct; position.partial1Time = ts;
+          if (s.beOnPartial1) {
+            if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
+            else position.sl = Math.min(position.sl, position.entryPrice);
+          }
         }
       }
 
@@ -635,6 +644,13 @@ if (args.emapb !== undefined) s.useEmaPullback = args.emapb === "1";
 if (args.stfactor) s.stFactor = parseFloat(args.stfactor);
 if (args.os) s.osLevel = parseInt(args.os);
 if (args.cooldown) s.cooldownBars = parseInt(args.cooldown);
+if (args.p1pct) s.partial1Pct = parseFloat(args.p1pct);
+if (args.p2pct) s.partial2Pct = parseFloat(args.p2pct);
+if (args.trailbe) s.trailBeR = parseFloat(args.trailbe);
+if (args.trailstart) s.trailStartR = parseFloat(args.trailstart);
+if (args.trailatr) s.trailAtrMult = parseFloat(args.trailatr);
+if (args.beontp1 !== undefined) s.beOnPartial1 = args.beontp1 === "1";
+if (args.partial !== undefined) s.usePartial = args.partial === "1";
 
 backtest(symbol, tf, months).catch((err) => {
   console.error("Backtest failed:", err.message);

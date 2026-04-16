@@ -49,6 +49,7 @@ function trendLabel(t) {
  */
 async function tick() {
   tickRunning = true;
+  try {
   const { symbol, timeframe } = config;
 
   // Fetch candle data: LTF + HTF
@@ -98,7 +99,10 @@ async function tick() {
     tg.notifyClose(symbol, isLong ? "Buy" : "Sell", state.entryPrice, estimatedExit, pnl, reason, state.barsInTrade);
     if (!pnlPositive) state.barsSinceLoss = 0;
     state.barsSinceClose = 0;
+    const savedTriggers = { long: state.longTriggered, short: state.shortTriggered };
     resetTradeState();
+    state.longTriggered = savedTriggers.long;
+    state.shortTriggered = savedTriggers.short;
   } else {
     state.barsSinceClose++;
     state.barsSinceLoss++;
@@ -130,9 +134,14 @@ async function tick() {
       state.barsInTrade = 0;
       state.longTriggered = true;
 
-      await exchange.setTradingStop(symbol, decision.sl, decision.tp);
+      try {
+        await exchange.setTradingStop(symbol, decision.sl, decision.tp);
+      } catch (err) {
+        log.error(`CRITICAL: Failed to set SL/TP on LONG entry: ${err.message}`);
+        tg.notifyError?.(`Failed to set SL/TP on LONG ${symbol}: ${err.message}`);
+      }
       log.info(
-        `LONG ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | P1: ${decision.partial1.toFixed(2)} | P2: ${decision.partial2.toFixed(2)}`
+        `LONG ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)}`
       );
       tg.notifyOpen(symbol, "Buy", signal.price, decision.sl, decision.tp, decision.partial1, decision.partial2);
       break;
@@ -153,9 +162,14 @@ async function tick() {
       state.barsInTrade = 0;
       state.shortTriggered = true;
 
-      await exchange.setTradingStop(symbol, decision.sl, decision.tp);
+      try {
+        await exchange.setTradingStop(symbol, decision.sl, decision.tp);
+      } catch (err) {
+        log.error(`CRITICAL: Failed to set SL/TP on SHORT entry: ${err.message}`);
+        tg.notifyError?.(`Failed to set SL/TP on SHORT ${symbol}: ${err.message}`);
+      }
       log.info(
-        `SHORT ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)} | P1: ${decision.partial1.toFixed(2)} | P2: ${decision.partial2.toFixed(2)}`
+        `SHORT ${qty} ${symbol} @ ${signal.price} | SL: ${decision.sl.toFixed(2)} | TP: ${decision.tp.toFixed(2)}`
       );
       tg.notifyOpen(symbol, "Sell", signal.price, decision.sl, decision.tp, decision.partial1, decision.partial2);
       break;
@@ -176,17 +190,25 @@ async function tick() {
       const closeSide = position.side === "Buy" ? "Sell" : "Buy";
       await exchange.reduceOrder(symbol, closeSide, closeQty);
       state.partialLevel = 2;
-      state.activeSl = state.entryPrice; // move to breakeven after both partials
-      await exchange.setTradingStop(symbol, state.entryPrice, state.activeTp);
+      try {
+        await exchange.setTradingStop(symbol, state.entryPrice, state.activeTp);
+        state.activeSl = state.entryPrice; // only update state after successful API call
+      } catch (err) {
+        log.warn(`Failed to move SL to BE after TP2: ${err.message}`);
+      }
       log.info(`Partial TP2: closed ${closeQty} (33%) — SL to BE — ${decision.reason}`);
       tg.notifyPartial(symbol, 2, closeQty, decision.reason);
       break;
     }
 
     case "move_sl_be": {
-      state.activeSl = state.entryPrice;
-      await exchange.setTradingStop(symbol, state.entryPrice, state.activeTp);
-      log.info(`SL moved to breakeven: ${state.entryPrice}`);
+      try {
+        await exchange.setTradingStop(symbol, state.entryPrice, state.activeTp);
+        state.activeSl = state.entryPrice;
+        log.info(`SL moved to breakeven: ${state.entryPrice}`);
+      } catch (err) {
+        log.warn(`Failed to move SL to BE: ${err.message}`);
+      }
       break;
     }
 
@@ -220,7 +242,9 @@ async function tick() {
       break;
     }
   }
-  tickRunning = false;
+  } finally {
+    tickRunning = false;
+  }
 }
 
 /**
@@ -254,7 +278,10 @@ async function manageTick() {
 
       if (!pnlPositive) state.barsSinceLoss = 0;
       state.barsSinceClose = 0;
+      const savedTriggers = { long: state.longTriggered, short: state.shortTriggered };
       resetTradeState();
+      state.longTriggered = savedTriggers.long;
+      state.shortTriggered = savedTriggers.short;
       return;
     }
 
@@ -297,8 +324,12 @@ async function manageTick() {
         const closeSide = isLong ? "Sell" : "Buy";
         await exchange.reduceOrder(symbol, closeSide, closeQty);
         state.partialLevel = 2;
-        state.activeSl = entryPrice;
-        await exchange.setTradingStop(symbol, entryPrice, state.activeTp);
+        try {
+          await exchange.setTradingStop(symbol, entryPrice, state.activeTp);
+          state.activeSl = entryPrice; // only update state after successful API call
+        } catch (err) {
+          log.warn(`[manageTick] Failed to move SL to BE after TP2: ${err.message}`);
+        }
         const reason = `Partial TP2 at ${unrealizedR.toFixed(1)}R`;
         log.info(`[manageTick] ${reason} — closed ${closeQty} — SL to BE`);
         tg.notifyPartial(symbol, 2, closeQty, reason);
@@ -306,13 +337,17 @@ async function manageTick() {
       }
     }
 
-    // Progressive trailing stop
-    if (s.useTrailRest && state.partialLevel >= 1) {
+    // Progressive trailing stop (activate after TP1 or when partials disabled)
+    if (s.useTrailRest && (state.partialLevel >= 1 || !s.usePartial)) {
       // Move SL to breakeven at +1R
       if (unrealizedR >= s.trailBeR && state.activeSl !== entryPrice) {
-        state.activeSl = entryPrice;
-        await exchange.setTradingStop(symbol, entryPrice, state.activeTp);
-        log.info(`[manageTick] SL → BE at ${unrealizedR.toFixed(1)}R`);
+        try {
+          await exchange.setTradingStop(symbol, entryPrice, state.activeTp);
+          state.activeSl = entryPrice; // only update state after successful API call
+          log.info(`[manageTick] SL → BE at ${unrealizedR.toFixed(1)}R`);
+        } catch (err) {
+          log.warn(`[manageTick] Failed to move SL to BE: ${err.message}`);
+        }
         return;
       }
 
@@ -342,10 +377,27 @@ async function manageTick() {
 
         // Update exchange-side SL if trail improved
         const slImproved = isLong ? trailSl > state.activeSl : trailSl < state.activeSl;
-        if (slImproved) {
-          state.activeSl = trailSl;
-          await exchange.setTradingStop(symbol, trailSl, state.activeTp);
-          log.debug(`[manageTick] Trail SL → ${trailSl.toFixed(4)}`);
+        // Safety: don't set SL past current price (would trigger immediately with slippage)
+        const slSafe = isLong ? trailSl < price : trailSl > price;
+        if (slImproved && slSafe) {
+          try {
+            await exchange.setTradingStop(symbol, trailSl, state.activeTp);
+            state.activeSl = trailSl; // only update state AFTER successful API call
+            log.debug(`[manageTick] Trail SL → ${trailSl.toFixed(4)}`);
+          } catch (err) {
+            log.warn(`[manageTick] Failed to update trail SL: ${err.message}`);
+          }
+        } else if (slImproved && !slSafe) {
+          // Trail SL is past current price — close at market instead
+          log.info(`[manageTick] Trail SL ${trailSl.toFixed(4)} past price ${price.toFixed(4)} — closing`);
+          await exchange.closePosition(symbol);
+          const pnl = position ? position.unrealisedPnl : 0;
+          const reason = `Trailing stop (market close at ${unrealizedR.toFixed(1)}R)`;
+          tg.notifyClose(symbol, position.side, entryPrice, price, pnl, reason, state.barsInTrade);
+          if (pnl < 0) state.barsSinceLoss = 0;
+          state.barsSinceClose = 0;
+          resetTradeState();
+          return;
         }
       }
     }
@@ -390,7 +442,6 @@ async function main() {
     await tick();
   } catch (err) {
     log.error(`Tick error: ${err.message}`);
-    tickRunning = false;
   }
 
   // Schedule ticks aligned to candle close
@@ -404,7 +455,6 @@ async function main() {
         await tick();
       } catch (err) {
         log.error(`Tick error: ${err.message}`);
-        tickRunning = false;
       }
       scheduleNext();
     }, wait);

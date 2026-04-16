@@ -54,11 +54,12 @@ module.exports = {
     tpMult: 4.0,
 
     // Multi-Level Partial TP
-    usePartial: true,
+    usePartial: false,     // disabled: trailing stop alone performs better (PF 4x vs 1.8x)
     partial1Pct: 0.33,   // close 33% at level 1
     partial1Mult: 1.2,   // level 1 = 1.2R
     partial2Pct: 0.33,   // close 33% at level 2
     partial2Mult: 2.0,   // level 2 = 2.0R
+    beOnPartial1: false,  // move SL to BE immediately after TP1 (vs waiting for trail)
     // remaining 34% rides with trailing stop
 
     // Progressive Trailing Stop
