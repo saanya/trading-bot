@@ -35,8 +35,15 @@ module.exports = {
     maxSlAtr: 3.0,             // cap SL at this many ATR from entry
     tpRangeMult: 2.5,          // TP = rangeWidth * mult
 
-    // Trailing (no partials)
+    // Partial TPs
     usePartial: false,
+    partial1Mult: 1.2,         // ATR multiple for first partial TP
+    partial2Mult: 2.0,         // ATR multiple for second partial TP
+    partial1Pct: 0.5,          // fraction of position to close at TP1
+    partial2Pct: 0,            // fraction at TP2 (0 = skip TP2)
+    beOnPartial1: true,        // move SL to BE after TP1
+
+    // Trailing
     useTrailRest: true,
     trailBeR: 1.0,
     trailStartR: 1.5,

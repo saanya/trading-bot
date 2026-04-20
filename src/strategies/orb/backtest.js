@@ -271,8 +271,39 @@ async function backtest(symbol, tfMinutes, months, riskMult = 1, qf = {}) {
           break;
         }
 
-        // Progressive Trailing Stop
-        if (s.useTrailRest) {
+        // Multi-level Partial TP
+        if (s.usePartial && position.partialLevel < 1) {
+          if ((isLong && mHigh >= position.partial1) || (!isLong && mLow <= position.partial1)) {
+            const exitP = position.partial1;
+            const partialPnl = isLong
+              ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct
+              : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
+            equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
+            position.partialLevel = 1;
+            position.sizeMultiplier -= s.partial1Pct;
+            position.partial1Time = mc.timestamp;
+            if (s.beOnPartial1) {
+              if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
+              else position.sl = Math.min(position.sl, position.entryPrice);
+            }
+          }
+        }
+        if (s.usePartial && position.partialLevel === 1 && s.partial2Pct > 0) {
+          if ((isLong && mHigh >= position.partial2) || (!isLong && mLow <= position.partial2)) {
+            const exitP = position.partial2;
+            const partialPnl = isLong
+              ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial2Pct
+              : ((position.entryPrice - exitP) / position.entryPrice) * s.partial2Pct;
+            equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial2Pct;
+            position.partialLevel = 2;
+            position.sizeMultiplier -= s.partial2Pct;
+            position.partial2Time = mc.timestamp;
+            position.sl = position.entryPrice;
+          }
+        }
+
+        // Progressive Trailing Stop (activate after TP1 or when partials disabled)
+        if (s.useTrailRest && (position.partialLevel >= 1 || !s.usePartial)) {
           if (unrealizedR >= s.trailBeR) {
             if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
             else position.sl = Math.min(position.sl, position.entryPrice);
@@ -298,6 +329,16 @@ async function backtest(symbol, tfMinutes, months, riskMult = 1, qf = {}) {
         else if (!isLong && high >= position.sl) { exitReason = "Stop Loss"; closeTrade(position, Math.min(position.sl, high), i, exitReason); }
         else if (isLong && high >= position.tp) { exitReason = "Take Profit"; closeTrade(position, Math.min(position.tp, high), i, exitReason); }
         else if (!isLong && low <= position.tp) { exitReason = "Take Profit"; closeTrade(position, Math.max(position.tp, low), i, exitReason); }
+        else if (s.usePartial && position.partialLevel < 1 && ((isLong && high >= position.partial1) || (!isLong && low <= position.partial1))) {
+          const exitP = position.partial1;
+          const partialPnl = isLong ? ((exitP - position.entryPrice) / position.entryPrice) * s.partial1Pct : ((position.entryPrice - exitP) / position.entryPrice) * s.partial1Pct;
+          equity += equity * partialPnl - equity * COMMISSION * 2 * s.partial1Pct;
+          position.partialLevel = 1; position.sizeMultiplier -= s.partial1Pct; position.partial1Time = ts;
+          if (s.beOnPartial1) {
+            if (isLong) position.sl = Math.max(position.sl, position.entryPrice);
+            else position.sl = Math.min(position.sl, position.entryPrice);
+          }
+        }
       }
 
       // Max duration
@@ -412,6 +453,9 @@ async function backtest(symbol, tfMinutes, months, riskMult = 1, qf = {}) {
           entryAtr: atrVal,
           sl,
           tp,
+          partial1: price + atrVal * s.partial1Mult,
+          partial2: price + atrVal * s.partial2Mult,
+          partialLevel: 0,
           entryBar: i,
           highest: price,
           lowest: price,
@@ -432,6 +476,9 @@ async function backtest(symbol, tfMinutes, months, riskMult = 1, qf = {}) {
           entryAtr: atrVal,
           sl,
           tp,
+          partial1: price - atrVal * s.partial1Mult,
+          partial2: price - atrVal * s.partial2Mult,
+          partialLevel: 0,
           entryBar: i,
           highest: price,
           lowest: price,
@@ -466,6 +513,10 @@ async function backtest(symbol, tfMinutes, months, riskMult = 1, qf = {}) {
       rMultiple,
       barsHeld: barIdx - pos.entryBar,
       reason,
+      partialClosed: pos.partialLevel > 0,
+      partialLevel: pos.partialLevel,
+      partial1Time: pos.partial1Time ? new Date(pos.partial1Time).toISOString() : null,
+      partial2Time: pos.partial2Time ? new Date(pos.partial2Time).toISOString() : null,
       entryTime: new Date(pos.entryTimestamp).toISOString(),
       exitTime: new Date(ltfCandles[barIdx].timestamp).toISOString(),
     });
@@ -531,6 +582,8 @@ function printReport(trades, finalEquity, equityCurve, symbol, tf, months) {
   console.log(`  Wins / Losses:       ${wins.length} / ${losses.length}`);
   console.log(`  Win Rate:            ${winRate.toFixed(1)}%`);
   console.log(`  Longs / Shorts:      ${longs.length} / ${shorts.length}`);
+  const partialCount = trades.filter((t) => t.partialClosed).length;
+  if (partialCount > 0) console.log(`  Partial TPs Hit:     ${partialCount}`);
   console.log(`  Avg Win:             ${avgWin.toFixed(2)}%`);
   console.log(`  Avg Loss:            ${avgLoss.toFixed(2)}%`);
   console.log(`  Avg R-Multiple:      ${avgR.toFixed(2)}R`);
@@ -551,14 +604,15 @@ function printReport(trades, finalEquity, equityCurve, symbol, tf, months) {
   if (trades.length > 0) {
     console.log(`\n  ALL TRADES (${trades.length})`);
     console.log(`  ${"─".repeat(85)}`);
-    console.log(`  ${"#".padEnd(4)} ${"Side".padEnd(6)} ${"Entry".padEnd(12)} ${"Exit".padEnd(12)} ${"P&L%".padEnd(8)} ${"R".padEnd(6)} ${"Bars".padEnd(5)} ${"Opened".padEnd(18)} ${"Closed".padEnd(18)} Reason`);
+    console.log(`  ${"#".padEnd(4)} ${"Side".padEnd(6)} ${"Entry".padEnd(12)} ${"Exit".padEnd(12)} ${"P&L%".padEnd(8)} ${"R".padEnd(6)} ${"Bars".padEnd(5)} ${"Opened".padEnd(18)} ${"TP1".padEnd(18)} ${"Closed".padEnd(18)} Reason`);
     for (let ti = 0; ti < trades.length; ti++) {
       const t = trades[ti];
       const side = t.side === "Buy" ? "LONG" : "SHORT";
       const opened = t.entryTime.slice(0, 16).replace("T", " ");
       const closed = t.exitTime.slice(0, 16).replace("T", " ");
+      const tp1 = t.partial1Time ? t.partial1Time.slice(0, 16).replace("T", " ") : "—";
       console.log(
-        `  ${String(ti + 1).padEnd(4)} ${side.padEnd(6)} ${t.entryPrice.toFixed(6).padEnd(12)} ${t.exitPrice.toFixed(6).padEnd(12)} ${t.pnlPct.toFixed(2).padEnd(8)} ${t.rMultiple.toFixed(1).padEnd(6)} ${String(t.barsHeld).padEnd(5)} ${opened.padEnd(18)} ${closed.padEnd(18)} ${t.reason}`
+        `  ${String(ti + 1).padEnd(4)} ${side.padEnd(6)} ${t.entryPrice.toFixed(6).padEnd(12)} ${t.exitPrice.toFixed(6).padEnd(12)} ${t.pnlPct.toFixed(2).padEnd(8)} ${t.rMultiple.toFixed(1).padEnd(6)} ${String(t.barsHeld).padEnd(5)} ${opened.padEnd(18)} ${tp1.padEnd(18)} ${closed.padEnd(18)} ${t.reason}`
       );
     }
   }
@@ -592,6 +646,12 @@ if (args.trailbe) s.trailBeR = parseFloat(args.trailbe);
 if (args.trailstart) s.trailStartR = parseFloat(args.trailstart);
 if (args.trailatr) s.trailAtrMult = parseFloat(args.trailatr);
 if (args.stfactor) s.stFactor = parseFloat(args.stfactor);
+if (args.partial !== undefined) s.usePartial = args.partial === "1";
+if (args.p1) s.partial1Mult = parseFloat(args.p1);
+if (args.p2) s.partial2Mult = parseFloat(args.p2);
+if (args.p1pct) s.partial1Pct = parseFloat(args.p1pct);
+if (args.p2pct) s.partial2Pct = parseFloat(args.p2pct);
+if (args.beontp1 !== undefined) s.beOnPartial1 = args.beontp1 === "1";
 if (args.session !== undefined) s.useSessionFilter = args.session === "1";
 if (args.dow !== undefined) { s.useDowFilter = !!args.dow; s.skipDays = args.dow ? args.dow.split(",").map(Number) : []; }
 const riskMult = args.risk ? parseFloat(args.risk) : 1;

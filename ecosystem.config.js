@@ -39,11 +39,16 @@ module.exports = {
     //   env: { SYMBOL: "APTUSDT", EMA_LEN: "30", ADX_THRESH: "20", BYBIT_API_KEY: SCALP_API_KEY, BYBIT_API_SECRET: SCALP_API_SECRET },
     // },
 
-    // // ORB Breakout (5m, 1hr opening range) — Account #3
-    // {
-    //   name: "orb-SUI",
-    //   script: "src/strategies/orb/index.js",
-    //   env: { SYMBOL: "SUIUSDT", BYBIT_API_KEY: ORB_API_KEY, BYBIT_API_SECRET: ORB_API_SECRET },
-    // },
+    // ORB Breakout (5m, 1hr opening range) — Account #3
+    {
+      name: "orb-SUI",
+      script: "src/strategies/orb/index.js",
+      env: { SYMBOL: "SUIUSDT", BYBIT_API_KEY: ORB_API_KEY, BYBIT_API_SECRET: ORB_API_SECRET },
+    },
+    {
+      name: "orb-M",
+      script: "src/strategies/orb/index.js",
+      env: { SYMBOL: "MUSDT", BYBIT_API_KEY: ORB_API_KEY, BYBIT_API_SECRET: ORB_API_SECRET },
+    },
   ],
 };
