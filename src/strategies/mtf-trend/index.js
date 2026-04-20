@@ -1,8 +1,8 @@
 const config = require("./config");
-const exchange = require("./exchange");
+const exchange = require("../../common/exchange");
 const strategy = require("./strategy");
-const log = require("./logger");
-const tg = require("./telegram");
+const log = require("../../common/logger");
+const tg = require("../../common/telegram");
 const s = config.strategy;
 
 let tickRunning = false;
@@ -432,7 +432,16 @@ async function main() {
   log.info("=".repeat(60));
   log.info(`MTF Trend Scalper Bot v3`);
   log.info(`Symbol: ${config.symbol} | TF: ${config.timeframe}m | Leverage: ${config.leverage}x`);
-  log.info(`Mode: ${config.dryRun ? "DRY RUN" : "LIVE"} | ${config.testnet ? "TESTNET" : "MAINNET"}`);
+  log.info(`Position: $${config.positionSize} | Mode: ${config.dryRun ? "DRY RUN" : "LIVE"} | ${config.testnet ? "TESTNET" : "MAINNET"}`);
+  log.info("-".repeat(60));
+  log.info(`HTF EMA: ${s.htfEmaFast}/${s.htfEmaSlow} | MinAgree: ${s.htfMinAgree} | Strict: ${s.htfStrict}`);
+  log.info(`Supertrend: ATR ${s.stAtrLen}, Factor ${s.stFactor}`);
+  log.info(`StochRSI: len=${s.stochLen} K=${s.stochK} D=${s.stochD} RSI=${s.rsiLen} OS=${s.osLevel}`);
+  log.info(`ADX: ${s.useAdx ? `>${s.adxThresh}` : "OFF"} | DI: ${s.useDi ? "ON" : "OFF"} | Vol: ${s.useVol ? `SMA${s.volSmaLen} x${s.volMult}` : "OFF"}`);
+  log.info(`Risk: SL=${s.slMult}x ATR | TP=${s.tpMult}x ATR`);
+  log.info(`Partial: ${s.usePartial ? `ON (${s.partial1Mult}R/${s.partial2Mult}R)` : "OFF"} | Trail: BE@${s.trailBeR}R Start@${s.trailStartR}R ATR*${s.trailAtrMult}`);
+  log.info(`Session: ${s.useSessionFilter ? `skip ${s.sessionSkipStart}:00-${s.sessionSkipEnd}:00 + hours [${s.sessionSkipHours}]` : "OFF"}`);
+  log.info(`DOW: ${s.useDowFilter ? `skip days [${s.skipDays}]` : "OFF"} | MaxBars: ${s.maxBarsTrade} | Cooldown: ${s.cooldownBars} | STFlip→BE: ${s.beOnStFlip}`);
   log.info("=".repeat(60));
 
   await exchange.setLeverage(config.symbol, config.leverage);

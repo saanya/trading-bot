@@ -1,6 +1,6 @@
-const ind = require("./indicators");
+const ind = require("../../common/indicators");
 const config = require("./config");
-const log = require("./logger");
+const log = require("../../common/logger");
 
 const s = config.strategy;
 
