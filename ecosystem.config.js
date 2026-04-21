@@ -48,7 +48,12 @@ module.exports = {
     {
       name: "orb-M",
       script: "src/strategies/orb/index.js",
-      env: { SYMBOL: "MUSDT", BYBIT_API_KEY: ORB_API_KEY, BYBIT_API_SECRET: ORB_API_SECRET },
+      env: { SYMBOL: "MUSDT", MAXSL_ATR: "2.0", BYBIT_API_KEY: ORB_API_KEY, BYBIT_API_SECRET: ORB_API_SECRET },
+    },
+    {
+      name: "orb-MERL",
+      script: "src/strategies/orb/index.js",
+      env: { SYMBOL: "MERLUSDT", SKIP_DAYS: "1", BYBIT_API_KEY: ORB_API_KEY, BYBIT_API_SECRET: ORB_API_SECRET },
     },
   ],
 };

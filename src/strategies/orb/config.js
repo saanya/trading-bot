@@ -32,7 +32,7 @@ module.exports = {
 
     // Risk
     slBuffer: 0.3,             // ATR fraction added beyond OR boundary
-    maxSlAtr: 3.0,             // cap SL at this many ATR from entry
+    maxSlAtr: parseFloat(process.env.MAXSL_ATR || "3.0"),  // cap SL at this many ATR from entry
     tpRangeMult: 2.5,          // TP = rangeWidth * mult
 
     // Partial TPs
@@ -57,7 +57,9 @@ module.exports = {
 
     // DOW filter
     useDowFilter: true,
-    skipDays: [1, 2],
+    skipDays: process.env.SKIP_DAYS
+      ? process.env.SKIP_DAYS.split(",").map(Number)
+      : [1, 2],
 
     // Quality filters
     diConfirm: true,            // require DI+ > DI- for long, DI- > DI+ for short
