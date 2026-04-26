@@ -653,6 +653,7 @@ if (args.p1pct) s.partial1Pct = parseFloat(args.p1pct);
 if (args.p2pct) s.partial2Pct = parseFloat(args.p2pct);
 if (args.beontp1 !== undefined) s.beOnPartial1 = args.beontp1 === "1";
 if (args.session !== undefined) s.useSessionFilter = args.session === "1";
+if (args.vol !== undefined) s.useVol = args.vol === "1";
 if (args.dow !== undefined) { s.useDowFilter = !!args.dow; s.skipDays = args.dow ? args.dow.split(",").map(Number) : []; }
 const riskMult = args.risk ? parseFloat(args.risk) : 1;
 

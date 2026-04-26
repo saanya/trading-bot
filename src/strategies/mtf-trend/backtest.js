@@ -638,6 +638,7 @@ if (args.adx) s.adxThresh = parseFloat(args.adx);
 if (args.toxichours !== undefined) s.sessionSkipHours = args.toxichours ? args.toxichours.split(",").map(Number) : [];
 if (args.dow !== undefined) { s.useDowFilter = !!args.dow; s.skipDays = args.dow ? args.dow.split(",").map(Number) : []; }
 if (args.volmax !== undefined) s.volMaxMult = parseFloat(args.volmax);
+if (args.vol !== undefined) s.useVol = args.vol === "1";
 if (args.maxbars) s.maxBarsTrade = parseInt(args.maxbars);
 if (args.reentry !== undefined) s.reentryAfterWin = args.reentry === "1";
 if (args.emapb !== undefined) s.useEmaPullback = args.emapb === "1";

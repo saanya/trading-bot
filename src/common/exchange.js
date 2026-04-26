@@ -179,8 +179,30 @@ async function getTicker(symbol) {
   return parseFloat(result.list[0].lastPrice);
 }
 
+/**
+ * Remove the in-progress (still forming) candle from the array.
+ * Bybit kline API includes the current candle; after .reverse() it's the last element.
+ * @param {Array} candles - sorted oldest→newest
+ * @param {string} interval - "1","5","15","60","D","W","M"
+ * @returns {Array} candles with in-progress bar removed (if present)
+ */
+function stripCurrentBar(candles, interval) {
+  if (!candles.length) return candles;
+  const intervalMs =
+    interval === "D" ? 86400000 :
+    interval === "W" ? 604800000 :
+    interval === "M" ? 2592000000 :
+    parseInt(interval) * 60000;
+  const last = candles[candles.length - 1];
+  if (last.timestamp + intervalMs > Date.now()) {
+    return candles.slice(0, -1);
+  }
+  return candles;
+}
+
 module.exports = {
   getCandles,
+  stripCurrentBar,
   getPosition,
   setLeverage,
   marketOrder,

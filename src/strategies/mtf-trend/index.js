@@ -53,12 +53,14 @@ async function tick() {
   const { symbol, timeframe } = config;
 
   // Fetch candle data: LTF + HTF
-  const [ltfCandles, dCandles, wCandles, mCandles] = await Promise.all([
+  const [rawLtf, dCandles, wCandles, mCandles] = await Promise.all([
     exchange.getCandles(symbol, timeframe, 200),
     exchange.getCandles(symbol, "D", 100),
     exchange.getCandles(symbol, "W", 100),
     exchange.getCandles(symbol, "M", 60),
   ]);
+  // Strip in-progress candle so analyze() sees only completed bars (fixes volume filter)
+  const ltfCandles = exchange.stripCurrentBar(rawLtf, timeframe);
 
   // Analyze MTF trend
   const mtf = strategy.analyzeMtfTrend({ D: dCandles, W: wCandles, M: mCandles });
@@ -422,7 +424,7 @@ function msUntilNextCandle() {
 
   const now = Date.now();
   const next = Math.ceil(now / intervalMs) * intervalMs;
-  return next - now + 5000; // +5s buffer for candle to finalize
+  return next - now + 8000; // +8s buffer for candle to finalize
 }
 
 /**
