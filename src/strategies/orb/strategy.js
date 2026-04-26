@@ -120,8 +120,10 @@ function analyze(candles5m, trend, range, state) {
   const adxOk = !s.useAdx || (adxVal !== null && adxVal > s.adxThresh);
 
   // Volume
-  const volSma = ind.sma(volumes, s.volSmaLen);
-  const volOk = !s.useVol || (volumes[i] > volSma[i] * s.volMult);
+  const volSmaArr = ind.sma(volumes, s.volSmaLen);
+  const volVal = volumes[i];
+  const volThresh = (volSmaArr[i] || 0) * s.volMult;
+  const volOk = !s.useVol || (volVal > volThresh);
 
   // Session filter
   const sessionOk = !s.useSessionFilter || (() => {
@@ -181,6 +183,8 @@ function analyze(candles5m, trend, range, state) {
     atrVal,
     price,
     adx: adxVal,
+    vol: volVal,
+    volThresh,
     volOk,
     sessionOk,
     dowOk,

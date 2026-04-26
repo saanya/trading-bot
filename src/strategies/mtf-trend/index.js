@@ -73,7 +73,7 @@ async function tick() {
   const signal = strategy.analyze(ltfCandles, mtf, state);
 
   log.debug(
-    `LTF — Price: ${signal.price} | VWAP: ${signal.vwap?.toFixed(2)} | ST: ${signal.stBullish ? "BULL" : "BEAR"} | StochK: ${signal.stochK?.toFixed(1)} | ADX: ${signal.adx?.toFixed(1)} | Vol: ${signal.volOk ? "OK" : "LOW"}`
+    `LTF — Price: ${signal.price} | VWAP: ${signal.vwap?.toFixed(2)} | ST: ${signal.stBullish ? "BULL" : "BEAR"} | StochK: ${signal.stochK?.toFixed(1)} | ADX: ${signal.adx?.toFixed(1)} | Vol: ${signal.volOk ? "OK" : "LOW"}(${signal.vol?.toFixed(0)}/${signal.volThresh?.toFixed(0)})`
   );
 
   // Get current position
@@ -237,7 +237,7 @@ async function tick() {
         `No signal | VWAP: ${p(c.aboveVwap)}↑${p(c.belowVwap)}↓ | ST: ${signal.stBullish ? "BULL" : "BEAR"} | ` +
         `StochK: ${p(c.kCrossUp)}↑${p(c.kCrossDown)}↓ zone:${p(c.stochLongOk)}L${p(c.stochShortOk)}S | ` +
         `ADX: ${p(c.adxOk)}(${signal.adx?.toFixed(0)}) DI: ${p(c.diLongOk)}L${p(c.diShortOk)}S | ` +
-        `Vol: ${p(c.volOk)} | HTF: D=${m.daily} W=${m.weekly} M=${m.monthly} bull:${p(m.htfBullish)} bear:${p(m.htfBearish)} | ` +
+        `Vol: ${p(c.volOk)}(${signal.vol?.toFixed(0)}/${signal.volThresh?.toFixed(0)}) | HTF: D=${m.daily} W=${m.weekly} M=${m.monthly} bull:${p(m.htfBullish)} bear:${p(m.htfBearish)} | ` +
         `CD: ${p(c.cooldownOk)} RE: ${p(c.reentryOk)} Ses: ${p(c.sessionOk)} DoW: ${p(c.dowOk)} | ` +
         `Triggered: L=${state.longTriggered} S=${state.shortTriggered}`
       );
@@ -452,7 +452,7 @@ async function main() {
   try {
     await tick();
   } catch (err) {
-    log.error(`Tick error: ${err.message}`);
+    log.error(`Tick error: ${err.message}\n${err.stack}`);
   }
 
   // Schedule ticks aligned to candle close
@@ -465,7 +465,7 @@ async function main() {
       try {
         await tick();
       } catch (err) {
-        log.error(`Tick error: ${err.message}`);
+        log.error(`Tick error: ${err.message}\n${err.stack}`);
       }
       scheduleNext();
     }, wait);

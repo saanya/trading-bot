@@ -193,7 +193,7 @@ async function tick() {
         log.info(
           `No signal | Breakout: ${p(c.breakoutLong)}L${p(c.breakoutShort)}S | Range: ${p(c.rangeOk)} | ` +
           `Trend: ${trend.bullish ? "BULL" : "BEAR"} Age: ${p(c.trendAgeOk)}(${trend.age}) | ` +
-          `ADX: ${p(c.adxOk)}(${signal.adx?.toFixed(0)}) | Vol: ${p(c.volOk)} | DI: ${p(c.diConfirmOk)} ST5m: ${p(c.stAlignOk)} | ` +
+          `ADX: ${p(c.adxOk)}(${signal.adx?.toFixed(0)}) | Vol: ${p(c.volOk)}(${signal.vol?.toFixed(0)}/${signal.volThresh?.toFixed(0)}) | DI: ${p(c.diConfirmOk)} ST5m: ${p(c.stAlignOk)} | ` +
           `Ses: ${p(c.sessionOk)} DoW: ${p(c.dowOk)} | ` +
           `Triggered: L=${state.longTriggeredSession === range.sessionId} S=${state.shortTriggeredSession === range.sessionId}`
         );
@@ -362,7 +362,7 @@ async function main() {
   try {
     await tick();
   } catch (err) {
-    log.error(`Tick error: ${err.message}`);
+    log.error(`Tick error: ${err.message}\n${err.stack}`);
   }
 
   // Schedule ticks aligned to candle close
@@ -375,7 +375,7 @@ async function main() {
       try {
         await tick();
       } catch (err) {
-        log.error(`Tick error: ${err.message}`);
+        log.error(`Tick error: ${err.message}\n${err.stack}`);
       }
       scheduleNext();
     }, wait);

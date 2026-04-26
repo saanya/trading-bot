@@ -97,9 +97,11 @@ function analyze(candles, mtf, state) {
   const diShortOk = !s.useDi || (dmiResult.diMinus[i] > dmiResult.diPlus[i]);
 
   // Volume (min + max cap to avoid spike traps)
-  const volSma = ind.sma(volumes, s.volSmaLen);
-  const volAboveMin = !s.useVol || (volumes[i] > volSma[i] * s.volMult);
-  const volBelowMax = !s.volMaxMult || (volumes[i] <= volSma[i] * s.volMaxMult);
+  const volSmaArr = ind.sma(volumes, s.volSmaLen);
+  const volVal = volumes[i];
+  const volThresh = (volSmaArr[i] || 0) * s.volMult;
+  const volAboveMin = !s.useVol || (volVal > volThresh);
+  const volBelowMax = !s.volMaxMult || (volVal <= (volSmaArr[i] || 0) * s.volMaxMult);
   const volOk = volAboveMin && volBelowMax;
 
   // Cooldown & re-entry
@@ -157,6 +159,8 @@ function analyze(candles, mtf, state) {
     diMinus: dmiResult.diMinus[i],
     stochK: stochRsi.k[i],
     stochD: stochRsi.d[i],
+    vol: volVal,
+    volThresh,
     volOk,
     cooldownOk,
     reentryOk,
